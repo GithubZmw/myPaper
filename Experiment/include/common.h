@@ -26,7 +26,7 @@ using namespace std;
 void initRNG(csprng *rng);
 void randBigInt(BIG *big);
 void hashtoZp256(BIG num, octet *ct);
-void hashtoZp384(BIG num, octet *ct);
+void hashtoZp384(BIG num, octet *ct,BIG q);
 void hashtoStr384(char* str, octet *ct);
 void hashtoDStr384(char* str, octet *ct);
 void testForBLS12381WithPairing();
