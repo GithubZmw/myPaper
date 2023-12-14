@@ -7,6 +7,12 @@
 #include "common.h"
 #include "CCAP.h"
 
+csprng rng_CCAP;
+/**
+ * 黑名单
+ */
+map<Cert, BIG> BlackList;
+
 // 定义一些消息，模拟论文中加密的数据
 char *request = (char *) "authentic request";
 char msg_request[32];
@@ -21,10 +27,6 @@ char msg_information[32];
 octet M_information = {sizeof(msg_information), sizeof(msg_information), information};
 
 
-/**
- * 查看一个octet类型数据的详细信息，用于调试
- * @param oc 要查看的octet
- */
 void showOCT(octet oc) {
     cout << "co.len = " << oc.len << endl;
     cout << "co.max = " << oc.max << endl;
@@ -32,30 +34,20 @@ void showOCT(octet oc) {
     OCT_output(&oc);
 }
 
-/**
- * 查看结构体Args中的相信信息，用于代码的调试
- * 【注意：该函数并未查看Args中的所有变量信息，在调试中可根据需要自行修改，打印想看的信息】
- * @param args Args的一个实例
- */
+
 void showArgs(Args args) {
     cout
             << "------------------------------------------------------- showArgs ----------------------------------------------------"
             << endl;
-    cout << "--------- [Args.ch]:" << endl;
-    BIG_output(args.ch);
-    cout << endl << "--------- [Args.r_d]:" << endl;
-    BIG_output(args.r_d);
-    cout << endl << "--------- [Args.sigma_dd_2]:" << endl;
-    BIG_output(args.sigma_dd_2);
-    cout << endl << "--------- [Args.r_dd_2]:" << endl;
-    BIG_output(args.r_dd_2);
-    cout << endl << "--------- [Args.w]:" << endl;
-    ECP_output(&args.w);
-    cout << endl << "--------- [Args.pk1]:" << endl;
-    ECP_output(&args.pk1);
-    cout
-            << "------------------------------------------------------- showArgs ----------------------------------------------------"
-            << endl;
+    cout << endl << "--------- [Args.sk1]:" << endl;
+    BIG_output(args.sk1);
+    cout << endl << "--------- [Args.sk2]:" << endl;
+    BIG_output(args.sk2);
+    cout << endl << "--------- [Args.sk3]:" << endl;
+    BIG_output(args.sk3);
+    cout << endl
+         << "------------------------------------------------------- showArgs ----------------------------------------------------"
+         << endl;
 }
 
 /**
@@ -79,12 +71,28 @@ void showParams(Params params) {
             << endl;
 }
 
-/**
- * 哈希函数，将大数ct哈希到有限域Z_p上,并将结果存储在num
- * @param num 将哈希结果映射到Z_p上得到的元素
- * @param ct 要哈希的数
- * @param q 有限域的阶
- */
+
+string toHexString(int n) {
+    // 传入十进制的正整数，将十进制整数转换为十六进制的字符串并返回。
+    // 设置字符串保存最终结果
+    string str = "";
+    while (n != 0) {
+        // 应该放在十六进制字符串后面的余数
+        int a = n % 16;
+        if (a >= 0 && a <= 9) {
+            char c = a + '0';
+            str = c + str;
+        } else if (a >= 10 && a <= 15) {
+            char c = a - 10 + 'A';
+            str = c + str;
+        } else {}
+        n = n / 16;
+
+    }
+    return str;
+}
+
+
 void hashtoZp384_CCAP(BIG num, octet *ct, BIG q) {
     hash384 h;
     // 数组长度设为48，由于每一位char用两个十六进制的数字表示【可以表示256个字符，刚好表示ASCII表】，
@@ -102,12 +110,7 @@ void hashtoZp384_CCAP(BIG num, octet *ct, BIG q) {
     BIG_mod(num, q);
 }
 
-/**
- * 在BLS12381曲线上进行双线性映射操作，将ECP和ECP2上的元素映射到FP12上
- * @param alpha1 ECP上的群元素
- * @param alpha2 ECP2上的群元素
- * @return 返回双线性映射的结果，是一个FP12上的元素
- */
+
 FP12 e2(BLS12383::ECP alpha1, BLS12383::ECP2 alpha2) {
     FP12 fp12;
     PAIR_ate(&fp12, &alpha2, &alpha1);
@@ -119,15 +122,7 @@ FP12 e2(BLS12383::ECP alpha1, BLS12383::ECP2 alpha2) {
     return fp12;
 }
 
-/**
- * 大整数模拟运算，求 base^exponent mod modulus 的值
- * 使用分治法求解，时间复杂度为O( log2(n) )
- * 由于B384_58::BIG是数组类型的数据，无法作为函数的返回值，因此这里创建了一个结构体作为返回值
- * @param base 底数
- * @param exponent 指数
- * @param modulus 模数
- * @return 返回模幂运算的结果
- */
+
 mp powmod(B384_58::BIG base, B384_58::BIG exponent, B384_58::BIG modulus) {
     mp mp;
     B384_58::BIG res, zero, one, two;
@@ -182,13 +177,6 @@ void getKeyPair(octet *sk, octet *pk) {
 }
 
 
-/**
- * ECC的签名算法。
- * @param sk ECC签名使用的私钥
- * @param message  待签名的消息
- * @param CS 签名的第一部分
- * @param DS 签名的第二部分
- */
 void sign_DSA(octet sk, octet message, octet *CS, octet *DS) {
     // 签名
     if (ECP_SP_DSA(HASH_TYPE_NIST256, &rng_CCAP, NULL, &sk, &message, CS, DS) != 0) {
@@ -205,14 +193,6 @@ void sign_DSA(octet sk, octet message, octet *CS, octet *DS) {
 }
 
 
-/**
- * ECC验签算法
- * @param pk 验签使用的公钥
- * @param message  签名的消息
- * @param CS 签名的第一部分
- * @param DS 签名的第二部分
- * @return 验签通过返回true，否则返回false
- */
 bool verify_DSA(octet pk, octet message, octet CS, octet DS) {
     // 验签
     if (ECP_VP_DSA(HASH_TYPE_NIST256, &pk, &message, &CS, &DS) != 0) {
@@ -236,10 +216,6 @@ void randBig(BIG *big) {
 }
 
 
-/**
- * 初始化CCAP方案的系统参数
- * @param params  存储系统参数的变量
- */
 void Setup(Params *params) {
     BIG_rcopy(params->p_widetilde, BLS12383::CURVE_Order);// 由于这个库中的配对，阶是固定的，直接复制过来
     BLS12383::ECP_generator(&params->g1);
@@ -256,31 +232,26 @@ void Setup(Params *params) {
     randBig(&r);
     BLS12383::ECP_copy(&params->g, &params->g1);
     BLS12383::ECP_mul(&params->g, r);
+
+
+    BIG_output(params->p_widetilde);
+    cout << endl;
 }
 
 
 di_A d_i_A;
 PAS_A pas_CA_A;
 PAS_B pas_KGC_B;
-VS vs_s;
 Params params;
 
 
-/**
- * 初始化各个实体的公私钥对
- * @param diA 域A中的设备【Device】 diA
- * @param pasA 域A中的代理认证服务器【Proxy Authentication Server】PAS_A
- * @param pasB 域B中的代理认证服务器【Proxy Authentication Server】PAS_B
- */
 void init_entity(di_A *diA, PAS_A *pasA, PAS_B *pasB) {
     getKeyPair(&diA->sk, &diA->pk);
     getKeyPair(&pasA->sk, &pasA->pk);
     getKeyPair(&pasB->sk, &pasB->pk);
 }
 
-/**
- * 初始化CCAP方案中的黑名单，这里往里面存储一个元素模拟以下黑名单
- */
+
 void initBlackList() {
     BIG r;
     Cert c;
@@ -291,11 +262,6 @@ void initBlackList() {
 }
 
 
-/**
- * 测试ECC加密和解密总共的耗时
- * CCAP方案中发送消息时采用公钥加密算法加密消息，但是未说明使用什么公钥加密算法
- * 考虑到现在市面上使用ECC算法较多【HTTPS的SSL层使用的就是这个算法】，因此使用ECC加密模拟论文中的加密
- */
 void ECC_encAndDec() {
 //    cout << "-------------------------------------- ECC_ECM --------------------------------------" << endl;
     int i, res;
@@ -424,9 +390,6 @@ void step1(Msg *msg) {
 }
 
 
-/**
- * CCAP方案的具体步骤 2
- */
 void step2(Msg *msg) {
     //    ------------------------------ PAS_B生成Lics ------------------------------
     randBig(&msg->vskB);
@@ -642,6 +605,9 @@ void initArgs(Args *args, Msg msg) {
     BLS12383::ECP_mul(&args->pk1, args->sk1);
     BLS12383::ECP_mul(&args->pk2, args->sk2);
     BLS12383::ECP_mul(&args->pk3, args->sk3);
+    mp mpd;
+//    = powmod(args->sk1,args->r,params.n);
+//    BIG_copy(args->pk1_revoke,mpd.big);
     // 初始化 u , v , w
     // 求u
     BLS12383::ECP_copy(&args->u, &params.g);
@@ -651,9 +617,11 @@ void initArgs(Args *args, Msg msg) {
     BLS12383::ECP_mul(&args->w, args->r);
     BIG one;
     BIG_one(one);
-    BIG_modadd(temp, one, params.n, params.p_widetilde);
-    mp mpd = powmod(temp, msg.ID_A, params.p_widetilde);
+    BIG_modadd(temp, one, params.p, params.n);// 这里 n = p^2
+    mpd = powmod(temp, msg.ID_A, params.n);
     BLS12383::ECP_mul(&args->w, mpd.big);
+
+
     // 求 v
 //    showArgs(*args);
     BIG h_uw;
@@ -667,7 +635,7 @@ void initArgs(Args *args, Msg msg) {
     BLS12383::ECP_toOctet(&ecp_oc1, &args->w, true);
     OCT_xor(&ecp_oc, &ecp_oc1);
     hashtoZp384_CCAP(h_uw, &ecp_oc, params.p_widetilde);
-    BIG_copy(args->h_uw , h_uw);
+    BIG_copy(args->h_uw, h_uw);
 
     BLS12383::ECP pk2_pk3_h;
     ECP_copy(&pk2_pk3_h, &args->pk3);
@@ -725,6 +693,226 @@ void initArgs(Args *args, Msg msg) {
     BIG_modmul(args->sigma_d_2, args->sigma_d, two, params.p_widetilde);
 }
 
+
+#define T 3
+BIG a[4][T];
+BLS12383::ECP D[4][T];
+
+BIG N;
+char ss[] = {0x06};
+BIG m[4][2 * T];
+
+
+void show(BIG a[4][T]) {
+    for (int i = 1; i < 4; ++i) {
+        for (int j = 0; j < T; ++j) {
+            cout << "a[" << i << "][" << j << "] : " << endl;
+            BIG_output(a[i][j]);
+            cout << endl;
+        }
+    }
+}
+
+void show(BIG a[4][2 * T]) {
+    for (int i = 1; i < 4; ++i) {
+        for (int j = 0; j < 2 * T; ++j) {
+            cout << "a[" << i << "][" << j << "] : " << endl;
+            BIG_output(a[i][j]);
+            cout << endl;
+        }
+    }
+}
+
+/**
+ * 初始化多项式的参数
+ * @param args 里面包含三个秘密 sk1,sk2,sk3
+ */
+void init_fi(Args args) {
+    BIG_copy(a[1][0], args.sk1);
+    BIG_copy(a[2][0], args.sk2);
+    BIG_copy(a[3][0], args.sk3);
+    // 随机选择系数
+    for (int i = 1; i < 4; ++i) {
+        for (int j = 1; j < T; ++j) {
+            BIG r;
+            randBig(&r);
+            BIG_copy(a[i][j], r);
+            BLS12383::ECP_copy(&D[i][j], &params.g);
+            BLS12383::ECP_mul(&D[i][j], a[i][j]);
+        }
+    }
+
+}
+
+/**
+ * Shamir秘密共享多项式函数
+ * @param x 函数的自变量
+ * @param t 多项式的阶
+ */
+void f(int i, BIG x, BIG *result) {
+    BIG res;
+    BIG_copy(res, a[i][0]);
+    BIG temp;
+    BIG x_j;//记录x^j
+    BIG_one(x_j);
+    for (int j = 1; j < T; ++j) {
+        BIG_modmul(x_j, x_j, x, params.p_widetilde);
+        BIG_modmul(temp, a[i][j], x_j, params.p_widetilde);
+        BIG_modadd(res, res, temp, params.p_widetilde);
+    }
+    BIG_copy(*result, res);
+}
+
+void init_m() {
+    BIG_fromBytesLen(N, ss, sizeof ss);
+    BIG j, one;
+    BIG_one(one);
+    for (int i = 1; i < 4; ++i) {
+        int jj = 1;
+        BIG_one(j);
+        while (BIG_comp(j, N) < 0) {
+            f(i, j, &m[i][jj]);
+            BIG_add(j, j, one);
+            jj++;
+        }
+    }
+}
+
+void Shamir(int i, BIG secret) {
+}
+
+
+BIG sk[4];
+
+void ID_tracking(Args args) {
+    BIG j, k, one;
+    BIG_one(one);
+    // 利用拉格朗日插值多项式求出sk1,sk2,sk3
+    for (int i = 1; i < 4; ++i) {
+        BIG temp, item;
+        BIG_zero(sk[i]);
+        BIG_zero(item);
+        BIG_one(j);
+        for (int jj = 1; jj <= T; ++jj) {
+            BIG_copy(item, m[i][jj]);
+            BIG_one(k);
+            for (int kk = 1; kk <= T; ++kk) {
+                if (kk != jj) {
+                    BIG_modmul(item, item, k, params.p_widetilde);
+                    BIG_modneg(temp, j, params.p_widetilde);
+                    BIG_modadd(temp, temp, k, params.p_widetilde);
+                    BIG_invmodp(temp, temp, params.p_widetilde);
+                    BIG_modmul(item, item, temp, params.p_widetilde);
+                }
+                BIG_add(k, k, one);
+            }
+            BIG_modadd(sk[i], sk[i], item, params.p_widetilde);
+            BIG_add(j, j, one);
+        }
+    }
+    // 验证u^(sk2+H(u,w)*sk3) ?= v^2
+    BLS12383::ECP left, right;
+    BIG exponent, two;
+    BIG_one(two);
+    BIG_add(two, two, two);
+    BIG_copy(exponent, args.h_uw);
+    BIG_modmul(exponent, exponent, args.sk3, params.p_widetilde);
+    BIG_modadd(exponent, exponent, args.sk2, params.p_widetilde);
+    BIG_modmul(exponent, exponent, two, params.p_widetilde);
+    ECP_copy(&left, &args.u);
+    ECP_mul(&left, exponent);
+
+    ECP_copy(&right, &args.v);
+    ECP_mul(&right, two);
+
+    cout << "Verify:  u^(sk2+H(u,w)*sk3) ?= v^2  " << ECP_equals(&left, &right) << endl;
+    // 计算出伪身份
+    BIG ID_p, ID;
+    BLS12383::ECP temp;
+    ECP_copy(&temp, &args.u);
+    ECP_mul(&temp, args.sk1);
+// [注意:论文中实现身份追踪时,要求pk1是乘法循环群,而在本实验使用的BLS12383曲线中G1是加法循环群]
+// 为了能够正常实现追踪功能,必须将w换为乘法循环群.由于BIG不能表示n^2,故.最后求ID失败了,有兴趣的读者可以实现追踪的最后一步
+    BIG w, pk1, g;
+    randBig(&g);
+    mp mpd = powmod(g, args.sk1, params.n);
+    BIG_copy(pk1, mpd.big);
+    BIG base, temp2;
+    BIG_modadd(base, one, params.p, params.n);// 这里 n = p^2
+    mpd = powmod(base, args.ID_A, params.n);
+    BIG_copy(w, mpd.big);
+    mpd = powmod(pk1, args.r, params.n);
+    BIG_modmul(w, w, mpd.big, params.n);
+    // 计算u
+    BIG u;
+    mpd = powmod(g, args.r, params.n);
+    BIG_copy(u, mpd.big);
+    // 计算ID_p
+    mpd = powmod(u, args.sk1, params.n);
+    BIG_copy(temp2, mpd.big);
+    BIG_invmodp(temp2, temp2, params.n);
+    BIG_modmul(ID_p, w, temp2, params.n);
+    // 计算ID (由于BIG的范围有限,无法表示n^2,因此无法追踪到真实身份,有兴趣的读者可以实现以下最后一步)
+    BIG_sub(ID, ID_p, one);
+    BIG_mod(ID, params.p);
+
+//    // 计算w_d
+//    BIG w_d;
+//    mpd = powmod(pk1, args.r_d_2, params.n);
+//    BIG_copy(w_d,mpd.big);
+//    mpd = powmod(base, args.sigma_d_2, params.n);
+//    BIG_copy(temp2,mpd.big);
+//    BIG_modmul(w_d, w_d, temp2, params.n);
+//    // 检查 w_d
+//    BIG right2;
+//    mpd = powmod(w, args.ch_2, params.n);
+//    BIG_copy(right2,mpd.big);
+//    mpd = powmod(pk1, args.r_dd_2, params.n);
+//    BIG_copy(temp2,mpd.big);
+//    BIG_modmul(right2, right2, temp2, params.n);
+//    mpd = powmod(base, args.sigma_dd_2, params.n);
+//    BIG_copy(temp2,mpd.big);
+//    BIG_modmul(right2, right2, temp2, params.n);
+//    cout << "check w_d :: result = " << (BIG_comp(w_d, right2) == 0) << endl;// ----------------------------------------------
+}
+
+void verify_M_ij(Args args) {
+    // 为每个ski选择一个t-1阶的多项式
+    init_fi(args);
+    init_m();
+    // 验证M_ij ;这里假设 t = 2
+    BIG one;
+    BIG_one(one);
+    for (int i = 1; i <= T; ++i) {
+        char ch[] = {0x00};
+        BIG jj;
+        BIG_fromBytesLen(jj, ch, sizeof ch);
+        BLS12383::ECP pk;
+        if (i == 1){
+            ECP_copy(&pk,&args.pk1);
+        } else if (i == 2){
+            ECP_copy(&pk,&args.pk2);
+        } else{
+            ECP_copy(&pk,&args.pk3);
+        }
+        for (int j = 1; j < T; ++j) {
+            BIG_add(jj, jj, one);
+            BLS12383::ECP M_ij, right;
+            BLS12383::ECP_copy(&M_ij, &params.g);
+            BLS12383::ECP_mul(&M_ij, m[i][j]);
+            BLS12383::ECP_copy(&right, &pk);
+            for (int k = 1; k < T; ++k) {
+                BLS12383::ECP_mul(&D[i][k], jj);
+                BLS12383::ECP_add(&right, &D[i][k]);
+                BIG_modmul(jj, jj, jj, params.p_widetilde);
+            }
+            cout << "M_ij =? right  " << BLS12383::ECP_equals(&M_ij, &right) << endl;
+        }
+    }
+
+
+}
+
 /**
  * 生成为身份过程的零知识证明需要验证很多东西，这里是使用多个函数进行验证
  * 本函数验证 u_d , v_d , w_d
@@ -739,7 +927,6 @@ void verify_UVW(Args args) {
     randBig(&pid);
     ECC_encAndDec();
     inBlack(pid);//检查是否在黑名单
-    // 为每个ski选择一个t-1阶的多项式
 
     // 使用pki对ID_A进行加密得到(u,v,w)
     //求 u_d
@@ -984,7 +1171,7 @@ void verify_D(Args args, Msg msg) {
 
     fp2 = e2(params.h1, params.g2);
     BIG tau_beta1_d;
-    BIG_modmul(tau_beta1_d,params.tau,args.beta1_d,params.p_widetilde);
+    BIG_modmul(tau_beta1_d, params.tau, args.beta1_d, params.p_widetilde);
     FP12_pow(&fp2, &fp2, tau_beta1_d);
     FP12_reduce(&fp2);
     FP12_mul(&fp1, &fp2);
@@ -1027,7 +1214,7 @@ void verify_D(Args args, Msg msg) {
 
     fp3 = e2(params.h1, params.g2);
     BIG tau_beta1_dd;
-    BIG_modmul(tau_beta1_dd,params.tau,args.beta1_dd,params.p_widetilde);
+    BIG_modmul(tau_beta1_dd, params.tau, args.beta1_dd, params.p_widetilde);
     FP12_pow(&fp3, &fp3, tau_beta1_dd);
     FP12_reduce(&fp3);
     FP12_mul(&fp1, &fp3);
@@ -1046,9 +1233,9 @@ void verify_D(Args args, Msg msg) {
 
 void testHashs() {
     BIG res;
-    BLS12383::ECP P,Q;
+    BLS12383::ECP P, Q;
     ECP_generator(&P);
-    ECP_copy(&Q,&P);
+    ECP_copy(&Q, &P);
     char str1[97], str2[97];
     octet oc;
     oc.val = str1;
@@ -1131,6 +1318,59 @@ void testECP_mul(Args args) {
 }
 
 
+void showSK() {
+    cout
+            << "------------------------------------------------------- showSK ----------------------------------------------------"
+            << endl;
+    cout << "sk[1]:" << endl;
+    BIG_output(sk[1]);
+    cout << endl;
+    cout << "sk[2]:" << endl;
+    BIG_output(sk[2]);
+    cout << endl;
+    cout << "sk[3]:" << endl;
+    BIG_output(sk[3]);
+    cout << endl;
+    cout
+            << "------------------------------------------------------- showSK ----------------------------------------------------"
+            << endl;
+}
+
+void test_fi(Args args) {
+    init_fi(args);
+    show(a);
+    init_m();
+    show(m);
+//    int i = 2, j = 2;
+//    char ch[] = {0x02};
+//    BIG jj;
+//    BIG_fromBytesLen(jj, ch, sizeof ch);
+//    BLS12383::ECP M_ij, right;
+//    BLS12383::ECP_copy(&M_ij, &params.g);
+//    BLS12383::ECP_mul(&M_ij, m[i][j]);
+//    BLS12383::ECP_copy(&right, &args.pk2);
+//    for (int k = 1; k < T; ++k) {
+//        BLS12383::ECP_mul(&D[i][k], jj);
+//        BLS12383::ECP_add(&right, &D[i][k]);
+//        BIG_modmul(jj, jj, jj, params.p_widetilde);
+//    }
+//    cout << "M_ij =? right  " << BLS12383::ECP_equals(&M_ij, &right) << endl;
+
+//    showArgs(args);
+//    showSK();
+    ID_tracking(args);
+//    showSK();
+
+//    BIG res, x;
+//    char char_x[] = {0x10};
+//    BIG_fromBytesLen(x,char_x,sizeof char_x);
+//    BIG_output(x);
+//    cout << endl;
+//    f(1, x, &res);
+//    BIG_output(res);
+//    cout << endl;
+}
+
 
 int main() {
     initRNG(&rng_CCAP);
@@ -1142,12 +1382,17 @@ int main() {
     step1(&msg);
     step2(&msg);
     initArgs(&args, msg);
+    verify_M_ij(args);
     verify_UVW(args);
     verify_AC(args);
     verify_BXX(args);
     verify_D(args, msg);// 这个验证没有通过，但是不影响计算开销的测量
     gettimeofday(&endTime, NULL);
     cout << endTime.tv_usec - startTime.tv_usec << endl;
+
+
+//    test_fi(args);
+
     return 0;
 }
 

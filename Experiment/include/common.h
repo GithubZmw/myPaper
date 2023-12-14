@@ -23,6 +23,10 @@ using namespace BLS12383;
 using namespace core;
 using namespace std;
 
+//csprng rng_rng;
+
+
+
 void initRNG(csprng *rng);
 void randBigInt(BIG *big);
 void hashtoZp256(BIG num, octet *ct);

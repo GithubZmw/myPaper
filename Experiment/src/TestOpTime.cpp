@@ -1,8 +1,10 @@
 // BLS12-383曲线参考：https://blog.csdn.net/u011680118/article/details/119910411
 
-#include <iostream>
+
 #include "common.h"
 #include "TestOpTime.h"
+#include <iostream>
+
 
 #define CT_OFFSET 100
 
