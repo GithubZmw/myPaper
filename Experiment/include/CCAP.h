@@ -22,6 +22,11 @@ char s_pasA[EGS_NIST256], w_pasA[2 * EFS_NIST256 + 1];
 char s_pasB[EGS_NIST256], w_pasB[2 * EFS_NIST256 + 1];
 
 char ds[EGS_NIST256], cs[EGS_NIST256];
+char info_ds[EGS_NIST256], info_cs[EGS_NIST256];
+char Msg2_CertA_info_ds[EGS_NIST256], Msg2_CertA_info_cs[EGS_NIST256];
+char Msg2_CertB_info_ds[EGS_NIST256], Msg2_CertB_info_cs[EGS_NIST256];
+char msg1_cert_ds[EGS_NIST256], msg1_cert_cs[EGS_NIST256];
+char msg1_sign_ds[EGS_NIST256], msg1_sign_cs[EGS_NIST256];
 
 /**
 	@brief di_A Structure - 论文中的实体di_A
@@ -79,30 +84,59 @@ typedef struct C{
         return memcmp(this->CS.val, other.CS.val, min(this->CS.len, other.CS.len)) < 0;
     }
 }Cert;
+typedef struct {
+    octet CS = {0, sizeof(msg1_cert_cs), msg1_cert_cs};/** 签名的第一部分 */
+    octet DS = {0, sizeof(msg1_cert_ds), msg1_cert_ds};/** 签名的第二部分 */
+}Msg1_certA;
+typedef struct {
+    octet CS = {0, sizeof(msg1_sign_cs), msg1_sign_cs};/** 签名的第一部分 */
+    octet DS = {0, sizeof(msg1_sign_ds), msg1_sign_ds};/** 签名的第二部分 */
+}Msg1_signA;
 /**
 	@brief Msg1 Structure - 认证过程中的通讯消息
 */
 typedef struct {
-    Cert certA;/** 用自己私钥生成的签名 */
-    Cert signA;/** 用接受对方公钥加密的消息 */
+    Msg1_certA certA;/** 用自己私钥生成的签名 */
+    Msg1_signA signA;/** 用接受对方公钥加密的消息 */
 }Msg1;
+/**
+	@brief Info_Cert Structure - 证书，由于文中需要进行签名和验签，本实验采用ECC算法，签名格式如下
+*/
+typedef struct {
+    octet CS = {0, sizeof(info_cs), info_cs};/** 签名的第一部分 */
+    octet DS = {0, sizeof(info_ds), info_ds};/** 签名的第二部分 */
+}Info_Cert;
 /**
 	@brief Info Structure - 论文中提到的di_A的身份信息
 */
 typedef struct {
     octet information;/** 身份信息 */
-    Cert cert;/** 证书 */
+    Info_Cert cert;/** 证书 */
 }Info;
+/**
+	@brief Info_Cert Structure - 证书，由于文中需要进行签名和验签，本实验采用ECC算法，签名格式如下
+*/
+typedef struct {
+    octet CS = {0, sizeof(Msg2_CertA_info_cs), Msg2_CertA_info_cs};/** 签名的第一部分 */
+    octet DS = {0, sizeof(Msg2_CertA_info_ds), Msg2_CertA_info_ds};/** 签名的第二部分 */
+}Msg2_CertA;
+/**
+	@brief Info_Cert Structure - 证书，由于文中需要进行签名和验签，本实验采用ECC算法，签名格式如下
+*/
+typedef struct {
+    octet CS = {0, sizeof(Msg2_CertB_info_cs), Msg2_CertB_info_cs};/** 签名的第一部分 */
+    octet DS = {0, sizeof(Msg2_CertB_info_ds), Msg2_CertB_info_ds};/** 签名的第二部分 */
+}Msg2_CertB;
 /**
 	@brief Msg2 Structure - 论文中通讯时发送的消息之一
 */
 typedef struct {
     int crossLicensing;/** 跨域证书 */
     BIG ID_A;/** di_A的身份 */
-    Cert certA;/** di_A生成的证书 */
+    Msg2_CertA certA;/** di_A生成的证书 */
     Info infoA;/** di_A的身份信息 */
     octet pkA;/** PAS_A的公钥信息 */
-    Cert signB;/** 使用PAS_B的公钥加密得到的信息 */
+    Msg2_CertB signB;/** 使用PAS_B的公钥加密得到的信息 */
 }Msg2;
 /**
 	@brief Args Structure - 论文中的认证过程比较复杂，本实验将认证的复杂过程分开验证，在不影响效率的情况下复现实验
@@ -123,6 +157,28 @@ typedef struct {
     BIG r_dd, epsilon_dd, sigma_dd, gamma_dd, d_dd, theta1_dd, theta2_dd, theta3_dd, theta4_dd, beta1_dd, beta2_dd, beta3_dd, beta4_dd;//
     BIG r_d_2, sigma_d_2, r_dd_2, ch_2, sigma_dd_2;
 } Args;
+
+/**
+	@brief UVW Structure - 零知识证明的一部分
+*/
+typedef struct {
+    BLS12383::ECP u_d;
+    BLS12383::ECP v_d;
+    BLS12383::ECP w_d;
+}UVW;
+/**
+	@brief BXX Structure - 零知识证明的一部分
+*/
+typedef struct {
+    BLS12383::ECP B11_d;
+    BLS12383::ECP B12_d;
+    BLS12383::ECP B31_d;
+    BLS12383::ECP B32_d;
+    BLS12383::ECP B4_d;
+}BXX;
+
+
+
 /**
 	@brief mp Structure - 大整数模幂运算需要用到
 */
@@ -233,25 +289,100 @@ void ECC_encAndDec();
  */
 bool inBlack(BIG id);
 /**
- * CCAP方案认证的全过程
- * @param msg 认证过程中产生的消息，接受该消息的实体会用到，使用msg存储这些消息
- */
-void step1(Msg *msg);
-/**
- * CCAP方案的具体步骤 2
- */
-void step2(Msg *msg);
-/**
  * 初始化系统认证过程中需要用到的参数
  * @param args 初始化的参数存储在这个结构体中
  * @param msg 初始化参数的时候需要用到认证过程中产生的一些参数，例如ID_A这些参数存储在这个变量之中
  */
 void initArgs(Args *args, Msg msg);
 /**
- * 验证秘密共享的Mij是否正确
- * @param args 参数
+ * 初始化多项式的参数
+ * @param args 里面包含三个秘密 sk1,sk2,sk3
  */
-void verify_M_ij(Args args);
+void init_fi(Args args);
+/**
+ * Shamir秘密共享多项式函数
+ * @param x 函数的自变量
+ * @param t 多项式的阶
+ */
+void f(int i, BIG x, BIG *result);
+/**
+ * 计算m[i][j] , j = {1,2,...,n}
+ */
+void init_m();
+/**
+ * 通过此函数追踪设备的真实身份。
+ * 文中需要使用乘法循环群才能完成身份追踪的最后两步，即
+ *      ID' =  (w / s^sk1) mod n^2
+ *      ID = ID' - 1 mod n
+ * 但是并未找到支持配对的乘法循环群曲线，本实验使用的时BLS12383曲线，无法通过上述步骤最总真是身份
+ * 但是这对于测量计算开销并无来影响
+ * @param args 需要用到私钥 pk1,pk2,pk3，从而追踪到sk1,sk2,sk3
+ */
+void ID_tracking(Args args);
+/**
+ * 生成初始化秘密共享的函数，初始化mij
+ * @param args 初始化需要用到的参数
+ */
+void PAS_A_gen_mij(Args args);
+/**
+ * 秘密共享时，验证Mij
+ * 这里假设将秘密共享给2个人，即 m[i][j]中,j={1,2}
+ * @param args
+ */
+void PAS_B_verify_Mij(Args args);
+/**
+ * 跨域认证请求
+ */
+void diA_crossDomain_requestByPID();
+/**
+ * PAS_A计算u,w,v
+ * @param args
+ * @return 返回 u w v
+ */
+UVW PAS_A_gen_UVW(Args args);
+/**
+ * PAS_B验证UVW的正确性
+ * @param uvw 收到的uvw
+ * @param args 系统参数
+ */
+void PAS_B_verify_UVW(UVW uvw, Args args);
+/**
+ * PAS_A生成认证的 A C
+ * @param args 系统参数
+ * @return A，C
+ */
+FP12 PAS_A_gen_AC(Args args);
+/**
+ * PAS_B验证A,C的正确性
+ * @param C_d 收到的C
+ * @param args 系统参数
+ */
+void PAS_B_verify_AC(FP12 C_d, Args args);
+/**
+ * PAS_A生成认证的 B11,B12,B31,B32,B4
+ * @param args 系统参数
+ * @return B11,B12,B31,B32,B4
+ */
+BXX PAS_A_gen_BXX(Args args);
+/**
+ * PAS_B验证B11,B12,B31,B32,B4的正确性
+ * @param bxx B11,B12,B31,B32,B4
+ * @param args 系统参数
+ */
+void PAS_B_verify_BXX(BXX bxx, Args args);
+/**
+ * PAS_A生成认证的 D
+ * @param args 系统参数
+ * @return D
+ */
+FP12 PAS_A_gen_D(Args args);
+/**
+ * PAS_B验证D的正确性
+ * @param D_d 收到的PAS_A发来的D
+ * @param args 系统参数
+ * @param msg 系统参数
+ */
+void PAS_B_verify_D(FP12 D_d, Args args, Msg msg);
 /**
  * 生成为身份过程的零知识证明需要验证很多东西，这里是使用多个函数进行验证
  * 本函数验证 u_d , v_d , w_d

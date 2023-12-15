@@ -8,23 +8,12 @@
 
 csprng rng_rng;
 
-
-/**
- * 生成一个Fq有限域上的随机数
- * @param big 随机数对象，生成的随机数的值将会赋值给这个变量
- */
 void randBigInt_BASA(BIG *big) {
     BIG mod;
     BIG_rcopy(mod, CURVE_Order);
     BIG_randtrunc(*big, mod, 2 * CURVE_SECURITY_BLS12383, &rng_rng);
 }
 
-/**
- * 哈希函数，将大数ct哈希到有限域Z_p上,并将结果存储在num
- * @param num 将哈希结果映射到Z_p上得到的元素
- * @param ct 要哈希的数
- * @param q 有限域的阶
- */
 void hashtoZp384_BASA(BIG num, octet *ct, BIG q) {
     hash384 h;
     // 数组长度设为48，由于每一位char用两个十六进制的数字表示【可以表示256个字符，刚好表示ASCII表】，
@@ -42,13 +31,6 @@ void hashtoZp384_BASA(BIG num, octet *ct, BIG q) {
     BIG_mod(num, q);
 }
 
-
-/**
- * 哈希函数,用来将三个BIG类型求哈希
- * @param ID 用户ID
- * @param hid 哈希参数
- * @param q 椭圆曲线的阶
- */
 void H(BIG *result, BIG ID, BIG hid, BIG q) {
     octet oc, oc2;
     char str[48], str2[48], str3[48];
@@ -75,13 +57,6 @@ void H(BIG *result, BIG ID, BIG hid, BIG q) {
     BIG_copy(*result, t1);
 }
 
-
-/**
- * 双线性映射
- * @param alpha1 G1上的元素
- * @param alpha2 G2上的元素
- * @return 返回双线性映射的结果GT上的元素
- */
 FP12 e3(ECP alpha1, ECP2 alpha2) {
     FP12 temp1;
     PAIR_ate(&temp1, &alpha2, &alpha1);
@@ -93,10 +68,7 @@ FP12 e3(ECP alpha1, ECP2 alpha2) {
     return temp1;
 }
 
-/**
- * 初始胡系统参数
- * @param params
- */
+
 void Setup(Params *params, BIG *privKey) {
     BIG hid;
     randBigInt_BASA(&hid);
@@ -113,13 +85,6 @@ void Setup(Params *params, BIG *privKey) {
     BIG_copy(*privKey, ks);
 }
 
-/**
- * SM9算法的密钥生成算法
- * @param ID 申请密钥生成的用户ID
- * @param params 系统参数
- * @param ks 系统主私钥
- * @return 返回ID的签名私钥
- */
 ECP KGC_genKey(BIG ID, Params params, BIG ks) {
     BIG t1;
     H(&t1, ID, params.hid, params.q);
@@ -135,13 +100,6 @@ ECP KGC_genKey(BIG ID, Params params, BIG ks) {
     return D_id;
 }
 
-
-/**
- * 国密SM9算法
- * @param params BASA的公共参数
- * @param sk 签名私钥
- * @param M 签名消息
- */
 Signature SM9_sign(Params params, ECP sk_e, BIG M) {
     FP12 gt;
     gt = e3(params.P1, params.P_pub_s);
@@ -168,12 +126,6 @@ Signature SM9_sign(Params params, ECP sk_e, BIG M) {
     return sig;
 }
 
-/**
- * SM9验签算法
- * @param signature SM9签名
- * @param params 公共参数
- * @return 签名合法返回true,否则返回false
- */
 bool SM9_verify(Signature signature, Params params, BIG IDe, BIG M_p) {
 
     bool flag = true;
@@ -205,11 +157,6 @@ bool SM9_verify(Signature signature, Params params, BIG IDe, BIG M_p) {
     return (BIG_comp(h2, signature.h) == 0);
 }
 
-/**
- * 判断伪身份是否过期
- * @param pid 待判断的伪身份
- * @return 未过期返回true,否则返回false
- */
 bool isValid(XID xid) {
     bool res;
     struct timeval currTime;
@@ -217,7 +164,6 @@ bool isValid(XID xid) {
     res = xid.deadline - currTime.tv_sec;
     return res > 0;
 }
-
 
 XID genPID(Params params, BIG ks) {
     BIG ID;
@@ -247,21 +193,49 @@ void crossDomainAuthRequest() {
 }
 
 void BASA() {
+    struct timeval startTime;
+    struct timeval endTime;
+
+    long signTime = 0;
+    long verifyTime = 0;
     // ------------------------------------- 注册阶段 --------------------------------------------
-    // 初始化系统参数
+    // 初始化参数
     initRNG(&rng_rng);
     Params params;
     BIG ks;
+
+    // 1. 初始化系统参数
+    gettimeofday(&startTime, NULL);
     Setup(&params, &ks);
-    // 生成真实身份,并向KGC申请对应的签名私钥
+    gettimeofday(&endTime, NULL);
+    cout << "BASA's Setup time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+
+    // 2. 生成真实身份,并向KGC申请对应的签名私钥(注册阶段)
+    gettimeofday(&startTime, NULL);
     XID RID_ei_A = genPID(params, ks);
+    gettimeofday(&endTime, NULL);
+    cout << "BASA's Register time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+
+    // 3. KGC为真实身份生成对应的签名私钥
+    gettimeofday(&startTime, NULL);
     ECP RID_sk = KGC_genKey(RID_ei_A.ID, params, ks);
-    // 生成伪身份
+    gettimeofday(&endTime, NULL);
+    verifyTime += endTime.tv_usec - startTime.tv_usec;
+    // 4. ei_A生成伪身份
+    gettimeofday(&startTime, NULL);
     XID ID_ei_A = genPID(params, ks);
-    // 为伪身份生成对应的签名私钥
+    gettimeofday(&endTime, NULL);
+    signTime += endTime.tv_usec - startTime.tv_usec;
+
+    // 5. KGC为伪身份生成对应的签名私钥
+    gettimeofday(&startTime, NULL);
     ECP D_id = KGC_genKey(ID_ei_A.ID, params, ks);
+    gettimeofday(&endTime, NULL);
+    verifyTime += endTime.tv_usec - startTime.tv_usec;
+
     // ------------------------------------- 跨域认证 --------------------------------------------
     // 1. ei_A验证自己当前伪身份的合法性
+    gettimeofday(&startTime, NULL);
     bool Valid = isValid(ID_ei_A);
     if (!Valid) {
         // 重新生成伪身份,为伪身份生成对应的签名私钥
@@ -270,11 +244,19 @@ void BASA() {
     }
     // 2. 如果伪身份有效,那么使用真实身份的签名私钥对伪身份进行签名
     Signature signature = SM9_sign(params, RID_sk, ID_ei_A.ID);
+    gettimeofday(&endTime, NULL);
+    signTime += endTime.tv_usec - startTime.tv_usec;
+
     // 3. KGC_A验证签名的正确性并为其ei_A生成签名私钥
+    gettimeofday(&startTime, NULL);
     bool flag = SM9_verify(signature, params, RID_ei_A.ID, ID_ei_A.ID);
     cout << "flag: " << flag << endl;
     ECP sk_ei_A = KGC_genKey(ID_ei_A.ID, params, ks);
+    gettimeofday(&endTime, NULL);
+    verifyTime += endTime.tv_usec - startTime.tv_usec;
+
     // 4. KGC_A向BAS_A发送密钥更新请求
+    gettimeofday(&startTime, NULL);
     UpdateKeyRequest();
     // 5. BAS_A更新域A中寡欲ei_A的密钥
     UpdateKey();
@@ -289,18 +271,21 @@ void BASA() {
     signature = SM9_sign(params, sk_ei_A, M);
     // 9. AAS_A将签名给ei_A,然后ei_A给ej_B发送认证请求
     crossDomainAuthRequest();
+    gettimeofday(&endTime, NULL);
+    signTime += endTime.tv_usec - startTime.tv_usec;
     // 10. ej_B向AAS_B发送请求,验证签名的征正确性
+    gettimeofday(&startTime, NULL);
     flag = flag && SM9_verify(signature, params, ID_ei_A.ID, M);
+    gettimeofday(&endTime, NULL);
+    verifyTime += endTime.tv_usec - startTime.tv_usec;
     cout << "flag: " << flag << endl;
+
+    cout << "BASA's Sign time consumption is : " <<  signTime <<" us" << endl;
+    cout << "BASA's Verify time consumption is : " <<  verifyTime <<" us" << endl;
 }
 
+
 //int main() {
-//
-//    struct timeval startTime;
-//    struct timeval endTime;
-//    gettimeofday(&startTime, NULL);
 //    BASA();
-//    gettimeofday(&endTime, NULL);
-//    cout << endTime.tv_usec - startTime.tv_usec << endl;
 //    return 0;
 //}

@@ -71,28 +71,6 @@ void showParams(Params params) {
             << endl;
 }
 
-
-string toHexString(int n) {
-    // 传入十进制的正整数，将十进制整数转换为十六进制的字符串并返回。
-    // 设置字符串保存最终结果
-    string str = "";
-    while (n != 0) {
-        // 应该放在十六进制字符串后面的余数
-        int a = n % 16;
-        if (a >= 0 && a <= 9) {
-            char c = a + '0';
-            str = c + str;
-        } else if (a >= 10 && a <= 15) {
-            char c = a - 10 + 'A';
-            str = c + str;
-        } else {}
-        n = n / 16;
-
-    }
-    return str;
-}
-
-
 void hashtoZp384_CCAP(BIG num, octet *ct, BIG q) {
     hash384 h;
     // 数组长度设为48，由于每一位char用两个十六进制的数字表示【可以表示256个字符，刚好表示ASCII表】，
@@ -232,10 +210,6 @@ void Setup(Params *params) {
     randBig(&r);
     BLS12383::ECP_copy(&params->g, &params->g1);
     BLS12383::ECP_mul(&params->g, r);
-
-
-    BIG_output(params->p_widetilde);
-    cout << endl;
 }
 
 
@@ -326,17 +300,15 @@ bool inBlack(BIG id) {
     return false;
 }
 
-
-/**
- * CCAP方案认证的全过程
- * @param msg 认证过程中产生的消息，接受该消息的实体会用到，使用msg存储这些消息
- */
-void step1(Msg *msg) {
-//    初始化系统各实体的参数
-    Setup(&params);
+void init(Params *params) {
+    //    初始化系统各实体的参数
+    Setup(params);
     initBlackList();
     init_entity(&d_i_A, &pas_CA_A, &pas_KGC_B);
-//  ------------------------------ 智能设备生成两个证书，发送给PAS_A ------------------------------------
+}
+
+
+Msg1 di_A_crossDomain_request() {
     Cert certA;
     Cert signA;
     char ds_certA[EGS_NIST256], cs_certA[EGS_NIST256];
@@ -348,49 +320,89 @@ void step1(Msg *msg) {
 
     sign_DSA(pas_CA_A.sk, M_cert, &certA.CS, &certA.DS);
     sign_DSA(d_i_A.sk, M_request, &signA.CS, &signA.DS);
-//    ------------------------------ PAS_A收到消息后进行验证 -------------------------------------------
-    verify_DSA(pas_CA_A.pk, M_cert, certA.CS, certA.DS);
-    verify_DSA(d_i_A.pk, M_request, signA.CS, signA.DS);
-//    ------------------------------ PAS_A按照CCAP方案生成认证消息给 PAS_B ------------------------------
 
+    Msg1 msg1;
+    OCT_copy(&msg1.certA.CS, &certA.CS);
+    OCT_copy(&msg1.certA.DS, &certA.DS);
+    OCT_copy(&msg1.signA.CS, &signA.CS);
+    OCT_copy(&msg1.signA.DS, &signA.DS);
+    return msg1;
+}
+
+/**
+ *
+ * @param msg1
+ * @param msg
+ * @param startTime 计算签名所用的时间
+ * @return
+ */
+Msg2 PAS_A_gen_ID_A(Msg1 msg1, Msg *msg, timeval startTime, long *signTime) {
+    bool flag;
+    flag = verify_DSA(pas_CA_A.pk, M_cert, msg1.certA.CS, msg1.certA.DS);
+    flag = flag && verify_DSA(d_i_A.pk, M_request, msg1.signA.CS, msg1.signA.DS);
+    cout << "PAS_A_gen_ID_A verify \t\tresult = " << flag << endl;
+//    ------------------------------ PAS_A按照CCAP方案生成认证消息给 PAS_B ------------------------------
     // 计算ID_A
     octet oc;
-    OCT_copy(&oc, &certA.CS);
-    OCT_xor(&oc, &certA.DS);
+    OCT_copy(&oc, &msg1.certA.CS);
+    OCT_xor(&oc, &msg1.certA.DS);
     BIG ID_A;
     hashtoZp384_CCAP(ID_A, &oc, params.p_widetilde);
     BIG_copy(msg->ID_A, ID_A);//复制给msg
     // 生成证书signB
     char ds_signB[EGS_NIST256], cs_signB[EGS_NIST256];
     Cert signB;
-    signA.CS = {0, sizeof(cs_signB), cs_signB};
-    signA.DS = {0, sizeof(ds_signB), ds_signB};
+    msg1.signA.CS = {0, sizeof(cs_signB), cs_signB};
+    msg1.signA.DS = {0, sizeof(ds_signB), ds_signB};
     sign_DSA(pas_CA_A.sk, M_request, &signB.CS, &signB.DS);
-    ECC_encAndDec();//模拟PAS_A加密，PAS_B解密耗时
-
-//    -------------------------------------- PAS_B验证PAS_A的消息 ---------------------------------
-    bool flag = verify_DSA(pas_CA_A.pk, M_request, signB.CS, signB.DS);
-    cout << "flag:" << flag << endl;
-    // 验证ID_A的正确性
-    octet oc1;
-    OCT_xor(&oc1, &certA.CS);
-    OCT_xor(&oc1, &certA.DS);
-    BIG ID_A_hat;
-    hashtoZp384_CCAP(ID_A_hat, &oc1, params.p_widetilde);
-    flag = flag && (BIG_comp(ID_A_hat, ID_A) == 0);
-    cout << "flag:" << flag << endl;
-    // 验证用户是否在黑名单中
-    flag = flag && !inBlack(ID_A);
-    // 验证身份信息Info是否合法
+    // 身份信息的合法性
     Info infoA;
     sign_DSA(pas_CA_A.sk, M_information, &infoA.cert.CS, &infoA.cert.DS);
-    flag = flag && verify_DSA(pas_CA_A.pk, M_information, infoA.cert.CS, infoA.cert.DS);
-    cout << "flag:" << flag << endl;
+
+    Msg2 msg2;
+    BIG_copy(msg2.ID_A, ID_A);
+    msg2.certA.CS = msg1.certA.CS;
+    msg2.certA.DS = msg1.certA.DS;
+//    OCT_copy(&msg2.certA.CS, &msg1.certA.CS);
+//    OCT_copy(&msg2.certA.DS, &msg1.certA.DS);
+    OCT_copy(&msg2.signB.CS, &signB.CS);
+    OCT_copy(&msg2.signB.DS, &signB.DS);
+    msg2.infoA = infoA;
+    msg2.pkA = pas_CA_A.pk;
+
+    struct timeval endTime;
+    gettimeofday(&endTime, NULL);
+    *signTime += endTime.tv_usec - startTime.tv_usec;
+    return msg2;
+}
+
+
+void PAS_B_verify(Msg2 msg2, Msg *msg,timeval *startTime) {
+    gettimeofday(startTime, NULL);
+
+    ECC_encAndDec();//模拟PAS_A加密，PAS_B解密耗时
+    bool flag = verify_DSA(pas_CA_A.pk, M_request, msg2.signB.CS, msg2.signB.DS);
+    cout << "PAS_B verification \t\tresult = " << flag << endl;
+    // 验证ID_A的正确性
+    octet oc;
+    OCT_copy(&oc, &msg2.certA.CS);
+    OCT_xor(&oc, &msg2.certA.DS);
+
+
+    BIG ID_A_hat;
+    hashtoZp384_CCAP(ID_A_hat, &oc, params.p_widetilde);
+    flag = flag && (BIG_comp(ID_A_hat, msg2.ID_A) == 0);
+    cout << "ID_A_hat == ID_A  \t\tresult = " << flag << endl;
+    // 验证用户是否在黑名单中
+    flag = flag && !inBlack(msg2.ID_A);
+    // 验证身份信息Info是否合法
+    flag = flag && verify_DSA(pas_CA_A.pk, M_information, msg2.infoA.cert.CS, msg2.infoA.cert.DS);
+    cout << "PAS_B verify Info  \t\tresult = " << flag << endl;
     msg->flag = flag;
 }
 
 
-void step2(Msg *msg) {
+void PAS_B_gen_Lics(Msg *msg) {
     //    ------------------------------ PAS_B生成Lics ------------------------------
     randBig(&msg->vskB);
     BLS12383::ECP2_copy(&msg->vpkB, &params.g2);
@@ -402,18 +414,6 @@ void step2(Msg *msg) {
     BIG_invmodp(temp, temp, params.p_widetilde);
     BLS12383::ECP_copy(&msg->Lics, &params.g1);
     BLS12383::ECP_mul(&msg->Lics, temp);
-    //    ------------------------------ PAS_A验证Lics ------------------------------
-    BLS12383::FP12 left, right;
-    left = e2(params.g1, params.g2);
-    BLS12383::ECP2 vpkBAddg2;
-    BLS12383::ECP2_copy(&vpkBAddg2, &params.g2);
-    BLS12383::ECP2_mul(&vpkBAddg2, msg->ID_A);
-    BLS12383::ECP2_add(&vpkBAddg2, &msg->vpkB);
-    right = e2(msg->Lics, vpkBAddg2);
-    bool flag = msg->flag;
-    flag = flag && (FP12_equals(&left, &right));
-    cout << "verify Lics:" << endl;
-    cout << "flag:" << flag << endl;
     //    ------------------------------ PAS_B生成blk ------------------------------
     BLS12383::ECP blk;
     BIG mul;
@@ -427,6 +427,22 @@ void step2(Msg *msg) {
     ECP_mul(&blk, mul);
     ECP_copy(&msg->blk, &blk);
 }
+
+
+void PAS_A_Verify_Lics(Msg msg) {
+    //    ------------------------------ PAS_A验证Lics ------------------------------
+    BLS12383::FP12 left, right;
+    left = e2(params.g1, params.g2);
+    BLS12383::ECP2 vpkBAddg2;
+    BLS12383::ECP2_copy(&vpkBAddg2, &params.g2);
+    BLS12383::ECP2_mul(&vpkBAddg2, msg.ID_A);
+    BLS12383::ECP2_add(&vpkBAddg2, &msg.vpkB);
+    right = e2(msg.Lics, vpkBAddg2);
+    bool flag = msg.flag;
+    flag = flag && (FP12_equals(&left, &right));
+    cout << "PAS_A_Verify_Lics \t\tresult = " << flag << endl;
+}
+
 
 /**
  * 初始化系统认证过程中需要用到的参数
@@ -763,6 +779,9 @@ void f(int i, BIG x, BIG *result) {
     BIG_copy(*result, res);
 }
 
+/**
+ * 计算m[i][j] , j = {1,2,...,n}
+ */
 void init_m() {
     BIG_fromBytesLen(N, ss, sizeof ss);
     BIG j, one;
@@ -778,12 +797,16 @@ void init_m() {
     }
 }
 
-void Shamir(int i, BIG secret) {
-}
-
-
 BIG sk[4];
-
+/**
+ * 通过此函数追踪设备的真实身份。
+ * 文中需要使用乘法循环群才能完成身份追踪的最后两步，即
+ *      ID' =  (w / s^sk1) mod n^2
+ *      ID = ID' - 1 mod n
+ * 但是并未找到支持配对的乘法循环群曲线，本实验使用的时BLS12383曲线，无法通过上述步骤最总真是身份
+ * 但是这对于测量计算开销并无来影响
+ * @param args 需要用到私钥 pk1,pk2,pk3，从而追踪到sk1,sk2,sk3
+ */
 void ID_tracking(Args args) {
     BIG j, k, one;
     BIG_one(one);
@@ -827,34 +850,34 @@ void ID_tracking(Args args) {
 
     cout << "Verify:  u^(sk2+H(u,w)*sk3) ?= v^2  " << ECP_equals(&left, &right) << endl;
     // 计算出伪身份
-    BIG ID_p, ID;
-    BLS12383::ECP temp;
-    ECP_copy(&temp, &args.u);
-    ECP_mul(&temp, args.sk1);
+//    BIG ID_p, ID;
+//    BLS12383::ECP temp;
+//    ECP_copy(&temp, &args.u);
+//    ECP_mul(&temp, args.sk1);
 // [注意:论文中实现身份追踪时,要求pk1是乘法循环群,而在本实验使用的BLS12383曲线中G1是加法循环群]
 // 为了能够正常实现追踪功能,必须将w换为乘法循环群.由于BIG不能表示n^2,故.最后求ID失败了,有兴趣的读者可以实现追踪的最后一步
-    BIG w, pk1, g;
-    randBig(&g);
-    mp mpd = powmod(g, args.sk1, params.n);
-    BIG_copy(pk1, mpd.big);
-    BIG base, temp2;
-    BIG_modadd(base, one, params.p, params.n);// 这里 n = p^2
-    mpd = powmod(base, args.ID_A, params.n);
-    BIG_copy(w, mpd.big);
-    mpd = powmod(pk1, args.r, params.n);
-    BIG_modmul(w, w, mpd.big, params.n);
-    // 计算u
-    BIG u;
-    mpd = powmod(g, args.r, params.n);
-    BIG_copy(u, mpd.big);
-    // 计算ID_p
-    mpd = powmod(u, args.sk1, params.n);
-    BIG_copy(temp2, mpd.big);
-    BIG_invmodp(temp2, temp2, params.n);
-    BIG_modmul(ID_p, w, temp2, params.n);
-    // 计算ID (由于BIG的范围有限,无法表示n^2,因此无法追踪到真实身份,有兴趣的读者可以实现以下最后一步)
-    BIG_sub(ID, ID_p, one);
-    BIG_mod(ID, params.p);
+//    BIG w, pk1, g;
+//    randBig(&g);
+//    mp mpd = powmod(g, args.sk1, params.n);
+//    BIG_copy(pk1, mpd.big);
+//    BIG base, temp2;
+//    BIG_modadd(base, one, params.p, params.n);// 这里 n = p^2
+//    mpd = powmod(base, args.ID_A, params.n);
+//    BIG_copy(w, mpd.big);
+//    mpd = powmod(pk1, args.r, params.n);
+//    BIG_modmul(w, w, mpd.big, params.n);
+//    // 计算u
+//    BIG u;
+//    mpd = powmod(g, args.r, params.n);
+//    BIG_copy(u, mpd.big);
+//    // 计算ID_p
+//    mpd = powmod(u, args.sk1, params.n);
+//    BIG_copy(temp2, mpd.big);
+//    BIG_invmodp(temp2, temp2, params.n);
+//    BIG_modmul(ID_p, w, temp2, params.n);
+//    // 计算ID (由于BIG的范围有限,无法表示n^2,因此无法追踪到真实身份,有兴趣的读者可以实现以下最后一步)
+//    BIG_sub(ID, ID_p, one);
+//    BIG_mod(ID, params.p);
 
 //    // 计算w_d
 //    BIG w_d;
@@ -876,11 +899,15 @@ void ID_tracking(Args args) {
 //    cout << "check w_d :: result = " << (BIG_comp(w_d, right2) == 0) << endl;// ----------------------------------------------
 }
 
-void verify_M_ij(Args args) {
+
+void PAS_A_gen_mij(Args args) {
     // 为每个ski选择一个t-1阶的多项式
     init_fi(args);
     init_m();
-    // 验证M_ij ;这里假设 t = 2
+}
+
+
+void PAS_B_verify_Mij(Args args) {
     BIG one;
     BIG_one(one);
     for (int i = 1; i <= T; ++i) {
@@ -888,12 +915,12 @@ void verify_M_ij(Args args) {
         BIG jj;
         BIG_fromBytesLen(jj, ch, sizeof ch);
         BLS12383::ECP pk;
-        if (i == 1){
-            ECP_copy(&pk,&args.pk1);
-        } else if (i == 2){
-            ECP_copy(&pk,&args.pk2);
-        } else{
-            ECP_copy(&pk,&args.pk3);
+        if (i == 1) {
+            ECP_copy(&pk, &args.pk1);
+        } else if (i == 2) {
+            ECP_copy(&pk, &args.pk2);
+        } else {
+            ECP_copy(&pk, &args.pk3);
         }
         for (int j = 1; j < T; ++j) {
             BIG_add(jj, jj, one);
@@ -906,19 +933,14 @@ void verify_M_ij(Args args) {
                 BLS12383::ECP_add(&right, &D[i][k]);
                 BIG_modmul(jj, jj, jj, params.p_widetilde);
             }
-            cout << "M_ij =? right  " << BLS12383::ECP_equals(&M_ij, &right) << endl;
+            cout << "PAS_B_Verify_M[" << i << "][" << j <<"] \t\tresult = " << BLS12383::ECP_equals(&M_ij, &right) << endl;
         }
     }
-
-
 }
 
-/**
- * 生成为身份过程的零知识证明需要验证很多东西，这里是使用多个函数进行验证
- * 本函数验证 u_d , v_d , w_d
- * @param args 零知识证明需要用到的参数【这些参数都是实体PAS_A生成的】
- */
-void verify_UVW(Args args) {
+
+
+void diA_crossDomain_requestByPID() {
     //    ------------------------------ 按需生成伪身份 ------------------------------
     octet sk_p = {0, sizeof(s1), s1};
     octet pk_p = {0, sizeof(w1), w1};
@@ -927,20 +949,15 @@ void verify_UVW(Args args) {
     randBig(&pid);
     ECC_encAndDec();
     inBlack(pid);//检查是否在黑名单
+}
 
+
+UVW PAS_A_gen_UVW(Args args) {
     // 使用pki对ID_A进行加密得到(u,v,w)
     //求 u_d
     BLS12383::ECP u_d;
     BLS12383::ECP_copy(&u_d, &params.g);
     BLS12383::ECP_mul(&u_d, args.r_d_2);
-    // 检查 "u_d"
-    BLS12383::ECP g_1, h_1;
-    ECP_copy(&g_1, &args.u);
-    ECP_mul(&g_1, args.ch_2);
-    ECP_copy(&h_1, &params.g);
-    ECP_mul(&h_1, args.r_dd_2);
-    ECP_add(&g_1, &h_1);
-    cout << "check u_d :: result = " << ECP_equals(&u_d, &g_1) << endl;// ----------------------------------------------
     // 求 w_d
     mp mpd;
     BIG one, temp;
@@ -950,8 +967,37 @@ void verify_UVW(Args args) {
     BIG_one(one);
     BIG_modadd(temp, one, params.n, params.p_widetilde);
     mpd = powmod(temp, args.sigma_d_2, params.p_widetilde);
-    ECP_mul(&w_d, mpd.big);
+    // 求 v_d
+    BLS12383::ECP pk2_pk3_h;
+    ECP_copy(&pk2_pk3_h, &args.pk3);
+    ECP_mul(&pk2_pk3_h, args.h_uw);
+    ECP_add(&pk2_pk3_h, &args.pk2);
+    BLS12383::ECP v_d;
+    ECP_copy(&v_d, &pk2_pk3_h);
+    BLS12383::ECP_mul(&v_d, args.r_d_2);
+
+    UVW uvw;
+    uvw.u_d = u_d;
+    uvw.v_d = v_d;
+    uvw.w_d = w_d;
+    return uvw;
+}
+
+
+void PAS_B_verify_UVW(UVW uvw, Args args) {
+    // 检查 "u_d"
+    BLS12383::ECP g_1, h_1;
+    ECP_copy(&g_1, &args.u);
+    ECP_mul(&g_1, args.ch_2);
+    ECP_copy(&h_1, &params.g);
+    ECP_mul(&h_1, args.r_dd_2);
+    ECP_add(&g_1, &h_1);
+    cout << "PAS_B_Verify_u_d \t\tresult = " << ECP_equals(&uvw.u_d, &g_1)
+         << endl;// ----------------------------------------------
+
     // 检查 w_d
+    mp mpd;
+    BIG one, temp;
     ECP_copy(&g_1, &args.w);
     ECP_mul(&g_1, args.ch_2);
     ECP_copy(&h_1, &args.pk1);
@@ -961,45 +1007,24 @@ void verify_UVW(Args args) {
     mpd = powmod(temp, args.sigma_dd_2, params.p_widetilde);
     ECP_mul(&h_1, mpd.big);
     ECP_add(&g_1, &h_1);
-    cout << "check w_d :: result = " << ECP_equals(&w_d, &g_1) << endl;// ----------------------------------------------
-    // 求 v_d
-    // showArgs(args);
+    cout << "PAS_B_Verify_w_d \t\tresult = " << ECP_equals(&uvw.w_d, &g_1)
+         << endl;// ----------------------------------------------
+    // 检查 "v_d"
     BLS12383::ECP pk2_pk3_h;
     ECP_copy(&pk2_pk3_h, &args.pk3);
     ECP_mul(&pk2_pk3_h, args.h_uw);
     ECP_add(&pk2_pk3_h, &args.pk2);
-    BLS12383::ECP v_d;
-    ECP_copy(&v_d, &pk2_pk3_h);
-    BLS12383::ECP_mul(&v_d, args.r_d_2);
-    // 检查 "v_d"
     ECP_copy(&g_1, &args.v);
     ECP_copy(&h_1, &pk2_pk3_h);
     ECP_mul(&g_1, args.ch_2);
     ECP_mul(&h_1, args.r_dd_2);
     ECP_add(&g_1, &h_1);
-    cout << "check v_d :: result = " << ECP_equals(&v_d, &g_1)
+    cout << "PAS_A_Verify_v_d \t\tresult = " << ECP_equals(&uvw.v_d, &g_1)
          << endl;// ---------------------这里比较绝对值-------------------------
 }
 
-/**
- * 验证零知识证明之中的 A ，C 两个参数
- * @param args 零知识证明需要用到的参数【这些参数都是实体PAS_A生成的】
- */
-void verify_AC(Args args) {
-//    showArgs(args);
-//    showParams(params);
-    BLS12383::ECP g_1, h_1, ecp;
-    ECP_copy(&ecp, &args.A);
-    ECP_mul(&ecp, args.ch);
-    ECP_copy(&g_1, &params.g1);
-    ECP_mul(&g_1, args.sigma_dd);
-    ECP_copy(&h_1, &params.h1);
-    ECP_mul(&h_1, args.epsilon_dd);
-    ECP_add(&ecp, &g_1);
-    ECP_add(&ecp, &h_1);
-    cout << "check A_d :: result = " << ECP_equals(&args.A_d, &ecp)
-         << endl;// ----------------------------------------------
 
+FP12 PAS_A_gen_AC(Args args) {
     // 求C_d
     FP12 C_d;
     FP12 fp1, fp2;
@@ -1014,7 +1039,27 @@ void verify_AC(Args args) {
     FP12_copy(&C_d, &fp1);
     FP12_mul(&C_d, &fp2);
     FP12_reduce(&C_d);
+    return C_d;
+}
+
+
+void PAS_B_verify_AC(FP12 C_d, Args args) {
+    // 1. A_d 的计算在initArgs()中已经完成
+    // 2. 验证A_d
+    BLS12383::ECP g_1, h_1, ecp;
+    ECP_copy(&ecp, &args.A);
+    ECP_mul(&ecp, args.ch);
+    ECP_copy(&g_1, &params.g1);
+    ECP_mul(&g_1, args.sigma_dd);
+    ECP_copy(&h_1, &params.h1);
+    ECP_mul(&h_1, args.epsilon_dd);
+    ECP_add(&ecp, &g_1);
+    ECP_add(&ecp, &h_1);
+    cout << "PAS_A_Verify_A_d \t\tresult = " << ECP_equals(&args.A_d, &ecp)
+         << endl;// ----------------------------------------------
+
     // 验证c_d
+    FP12 fp1, fp2;
     fp1 = e2(args.C, args.vpkB);
     FP12_pow(&fp1, &fp1, args.ch);
     FP12_reduce(&fp1);
@@ -1032,15 +1077,12 @@ void verify_AC(Args args) {
     FP12_reduce(&fp12);
     FP12_mul(&fp12, &fp3);
     FP12_reduce(&fp12);
-    cout << "check C_d :: result = " << FP12_equals(&C_d, &fp12)
+    cout << "PAS_A_Verify_C_d \t\tresult = " << FP12_equals(&C_d, &fp12)
          << endl;// ----------------------------------------------
 }
 
-/**
- * 验证零知识证明中的 B11_d,B12_d,B31_d,B32_d,B4_d
- * @param args  零知识证明需要用到的参数【这些参数都是实体PAS_A生成的】
- */
-void verify_BXX(Args args) {
+
+BXX PAS_A_gen_BXX(Args args) {
     BLS12383::ECP g_1, h_1, ecp;
     // 计算 B11_d,B12_d,B31_d,B32_d,B4_d
     BLS12383::ECP B11_d, B12_d, B31_d, B32_d, B4_d;
@@ -1050,20 +1092,7 @@ void verify_BXX(Args args) {
     ECP_mul(&h_1, args.beta2_d);
     ECP_add(&g_1, &h_1);
     ECP_copy(&B11_d, &g_1);
-
-    // 验证 B11_d
-    ECP_copy(&ecp, &args.B1);
-    ECP_mul(&ecp, args.ch);
-    ECP_copy(&g_1, &params.g1);
-    ECP_mul(&g_1, args.beta1_dd);
-    ECP_copy(&h_1, &params.h1);
-    ECP_mul(&h_1, args.beta2_dd);
-    ECP_add(&ecp, &g_1);
-    ECP_add(&ecp, &h_1);
-    cout << "check B11_d :: result = " << ECP_equals(&B11_d, &ecp)
-         << endl;// ----------------------------------------------
-
-// 计算B12
+    // 计算B12
     ECP_copy(&g_1, &params.g1);
     ECP_mul(&g_1, args.theta1_d);
     ECP_copy(&h_1, &params.h1);
@@ -1075,20 +1104,6 @@ void verify_BXX(Args args) {
     ECP_add(&ecp, &g_1);
     ECP_add(&ecp, &h_1);
     ECP_copy(&B12_d, &ecp);
-    // 验证 B12_d
-    ECP_copy(&ecp, &args.B1);
-    BIG neg_sigma_dd;
-    BIG_modneg(neg_sigma_dd, args.sigma_dd, params.p_widetilde);
-    ECP_mul(&ecp, neg_sigma_dd);
-    ECP_copy(&g_1, &params.g1);
-    ECP_mul(&g_1, args.theta1_dd);
-    ECP_copy(&h_1, &params.h1);
-    ECP_mul(&h_1, args.theta2_dd);
-    ECP_add(&ecp, &g_1);
-    ECP_add(&ecp, &h_1);
-    cout << "check B12_d :: result = " << ECP_equals(&B12_d, &ecp)
-         << endl;// ----------------------------------------------
-
     // 计算B31_d
     ECP_copy(&g_1, &args.g11);
     ECP_mul(&g_1, args.beta3_d);
@@ -1096,18 +1111,6 @@ void verify_BXX(Args args) {
     ECP_mul(&h_1, args.beta4_d);
     ECP_copy(&B31_d, &g_1);
     ECP_add(&B31_d, &h_1);
-    // 验证 B31_d
-    ECP_copy(&g_1, &args.g11);
-    ECP_mul(&g_1, args.beta3_dd);
-    ECP_copy(&h_1, &args.g12);
-    ECP_mul(&h_1, args.beta4_dd);
-    ECP_copy(&ecp, &args.B3);
-    ECP_mul(&ecp, args.ch);
-    ECP_add(&ecp, &g_1);
-    ECP_add(&ecp, &h_1);
-    cout << "check B31_d :: result = " << ECP_equals(&B31_d, &ecp)
-         << endl;// ----------------------------------------------
-
     // 计算B32_d
     ECP_copy(&ecp, &args.B3);
     BIG neg_d_d;
@@ -1120,6 +1123,57 @@ void verify_BXX(Args args) {
     ECP_add(&ecp, &g_1);
     ECP_add(&ecp, &h_1);
     ECP_copy(&B32_d, &ecp);
+    // 计算B4
+    ECP_copy(&g_1, &args.g13);
+    ECP_mul(&g_1, args.theta3_d);
+    ECP_copy(&B4_d, &g_1);
+    // 返回值
+    BXX bxx;
+    bxx.B11_d = B11_d;
+    bxx.B12_d = B12_d;
+    bxx.B31_d = B31_d;
+    bxx.B32_d = B32_d;
+    bxx.B4_d = B4_d;
+    return bxx;
+}
+
+void PAS_B_verify_BXX(BXX bxx, Args args) {
+    BLS12383::ECP g_1, h_1, ecp;
+    // 验证 B11_d
+    ECP_copy(&ecp, &args.B1);
+    ECP_mul(&ecp, args.ch);
+    ECP_copy(&g_1, &params.g1);
+    ECP_mul(&g_1, args.beta1_dd);
+    ECP_copy(&h_1, &params.h1);
+    ECP_mul(&h_1, args.beta2_dd);
+    ECP_add(&ecp, &g_1);
+    ECP_add(&ecp, &h_1);
+    cout << "PAS_A_Verify_B11_d \t\tresult = " << ECP_equals(&bxx.B11_d, &ecp)
+         << endl;// ----------------------------------------------
+    // 验证 B12_d
+    ECP_copy(&ecp, &args.B1);
+    BIG neg_sigma_dd;
+    BIG_modneg(neg_sigma_dd, args.sigma_dd, params.p_widetilde);
+    ECP_mul(&ecp, neg_sigma_dd);
+    ECP_copy(&g_1, &params.g1);
+    ECP_mul(&g_1, args.theta1_dd);
+    ECP_copy(&h_1, &params.h1);
+    ECP_mul(&h_1, args.theta2_dd);
+    ECP_add(&ecp, &g_1);
+    ECP_add(&ecp, &h_1);
+    cout << "PAS_A_Verify_B12_d \t\tresult = " << ECP_equals(&bxx.B12_d, &ecp)
+         << endl;// ----------------------------------------------
+    // 验证 B31_d
+    ECP_copy(&g_1, &args.g11);
+    ECP_mul(&g_1, args.beta3_dd);
+    ECP_copy(&h_1, &args.g12);
+    ECP_mul(&h_1, args.beta4_dd);
+    ECP_copy(&ecp, &args.B3);
+    ECP_mul(&ecp, args.ch);
+    ECP_add(&ecp, &g_1);
+    ECP_add(&ecp, &h_1);
+    cout << "PAS_A_Verify_B31_d \t\tresult = " << ECP_equals(&bxx.B31_d, &ecp)
+         << endl;// ----------------------------------------------
     // 验证 B32_d
     BIG neg_d_dd;
     BIG_modneg(neg_d_dd, args.d_dd, params.p_widetilde);
@@ -1131,29 +1185,19 @@ void verify_BXX(Args args) {
     ECP_mul(&ecp, neg_d_dd);
     ECP_add(&g_1, &h_1);
     ECP_add(&ecp, &g_1);
-    cout << "check B32_d :: result = " << ECP_equals(&B32_d, &ecp)
+    cout << "PAS_A_Verify_B32_d \t\tresult = " << ECP_equals(&bxx.B32_d, &ecp)
          << endl;// ----------------------------------------------
-
-    // 计算B4
-    ECP_copy(&g_1, &args.g13);
-    ECP_mul(&g_1, args.theta3_d);
-    ECP_copy(&B4_d, &g_1);
     // 验证 B4
     ECP_copy(&g_1, &args.g13);
     ECP_mul(&g_1, args.theta3_dd);
     ECP_copy(&ecp, &args.B4);
     ECP_mul(&ecp, args.ch);
     ECP_add(&ecp, &g_1);
-    cout << "check B4_d :: result = " << ECP_equals(&B4_d, &ecp)
+    cout << "PAS_A_Verify_B4_d \t\tresult = " << ECP_equals(&bxx.B4_d, &ecp)
          << endl;// ----------------------------------------------
 }
 
-/**
- * 验证D是否正确
- * @param args 零知识证明需要用到的参数【这些参数都是实体PAS_A生成的】
- * @param msg 里面存储的有前面认证过程中PAS_A计算的黑名单blk
- */
-void verify_D(Args args, Msg msg) {
+FP12 PAS_A_gen_D(Args args) {
     // 计算D_d
     FP12 fp1, fp2, fp3, fp12;
     FP12 D_d;
@@ -1185,7 +1229,11 @@ void verify_D(Args args, Msg msg) {
     FP12_reduce(&fp1);
 
     FP12_copy(&D_d, &fp1);
+    return D_d;
+}
 
+void PAS_B_verify_D(FP12 D_d, Args args, Msg msg) {
+    FP12 fp1, fp2, fp3, fp12;
     // 验证D
     fp1 = e2(args.B2, params.g2);
     FP12_pow(&fp1, &fp1, params.tau);
@@ -1227,11 +1275,46 @@ void verify_D(Args args, Msg msg) {
     FP12_reduce(&fp3);
     FP12_mul(&fp1, &fp3);
     FP12_reduce(&fp1);
-    cout << "check D_d :: result = " << FP12_equals(&D_d, &fp12)
+    cout << "PAS_A_Verify_D_d \t\tresult = " << FP12_equals(&D_d, &fp12)
          << endl;// ----------------------------------------------
 }
 
+
+
+
+void showSK() {
+    cout
+            << "------------------------------------------------------- showSK ----------------------------------------------------"
+            << endl;
+    cout << "sk[1]:" << endl;
+    BIG_output(sk[1]);
+    cout << endl;
+    cout << "sk[2]:" << endl;
+    BIG_output(sk[2]);
+    cout << endl;
+    cout << "sk[3]:" << endl;
+    BIG_output(sk[3]);
+    cout << endl;
+    cout
+            << "------------------------------------------------------- showSK ----------------------------------------------------"
+            << endl;
+}
+
+void test() {
+    init_entity(&d_i_A, &pas_CA_A, &pas_KGC_B);
+    Cert cert;
+    sign_DSA(d_i_A.sk, M_cert, &cert.CS, &cert.DS);
+    verify_DSA(d_i_A.pk, M_cert, cert.CS, cert.DS);
+    sign_DSA(pas_CA_A.sk, M_request, &cert.CS, &cert.DS);
+    verify_DSA(pas_CA_A.pk, M_request, cert.CS, cert.DS);
+    sign_DSA(pas_KGC_B.sk, M_request, &cert.CS, &cert.DS);
+    verify_DSA(pas_KGC_B.pk, M_request, cert.CS, cert.DS);
+}
+
 void testHashs() {
+    Params params;
+    BIG_rcopy(params.p_widetilde,BLS12383::CURVE_Order);
+
     BIG res;
     BLS12383::ECP P, Q;
     ECP_generator(&P);
@@ -1251,16 +1334,6 @@ void testHashs() {
 
 }
 
-void test() {
-    init_entity(&d_i_A, &pas_CA_A, &pas_KGC_B);
-    Cert cert;
-    sign_DSA(d_i_A.sk, M_cert, &cert.CS, &cert.DS);
-    verify_DSA(d_i_A.pk, M_cert, cert.CS, cert.DS);
-    sign_DSA(pas_CA_A.sk, M_request, &cert.CS, &cert.DS);
-    verify_DSA(pas_CA_A.pk, M_request, cert.CS, cert.DS);
-    sign_DSA(pas_KGC_B.sk, M_request, &cert.CS, &cert.DS);
-    verify_DSA(pas_KGC_B.pk, M_request, cert.CS, cert.DS);
-}
 
 void testECC() {
     getKeyPair(&SK_base, &PK_base);
@@ -1301,6 +1374,10 @@ void testModpow() {
 
 
 void testECP_mul(Args args) {
+    Params params;
+    BIG_rcopy(params.p_widetilde,BLS12383::CURVE_Order);
+    ECP_generator(&params.g1);
+    ECP_generator(&params.h1);
 //    showParams(params);
 //    showArgs(args);
     BLS12383::ECP g_1, h_1, ecp;
@@ -1317,82 +1394,60 @@ void testECP_mul(Args args) {
          << endl;// ----------------------------------------------
 }
 
+void CCAP() {
 
-void showSK() {
-    cout
-            << "------------------------------------------------------- showSK ----------------------------------------------------"
-            << endl;
-    cout << "sk[1]:" << endl;
-    BIG_output(sk[1]);
-    cout << endl;
-    cout << "sk[2]:" << endl;
-    BIG_output(sk[2]);
-    cout << endl;
-    cout << "sk[3]:" << endl;
-    BIG_output(sk[3]);
-    cout << endl;
-    cout
-            << "------------------------------------------------------- showSK ----------------------------------------------------"
-            << endl;
-}
-
-void test_fi(Args args) {
-    init_fi(args);
-    show(a);
-    init_m();
-    show(m);
-//    int i = 2, j = 2;
-//    char ch[] = {0x02};
-//    BIG jj;
-//    BIG_fromBytesLen(jj, ch, sizeof ch);
-//    BLS12383::ECP M_ij, right;
-//    BLS12383::ECP_copy(&M_ij, &params.g);
-//    BLS12383::ECP_mul(&M_ij, m[i][j]);
-//    BLS12383::ECP_copy(&right, &args.pk2);
-//    for (int k = 1; k < T; ++k) {
-//        BLS12383::ECP_mul(&D[i][k], jj);
-//        BLS12383::ECP_add(&right, &D[i][k]);
-//        BIG_modmul(jj, jj, jj, params.p_widetilde);
-//    }
-//    cout << "M_ij =? right  " << BLS12383::ECP_equals(&M_ij, &right) << endl;
-
-//    showArgs(args);
-//    showSK();
-    ID_tracking(args);
-//    showSK();
-
-//    BIG res, x;
-//    char char_x[] = {0x10};
-//    BIG_fromBytesLen(x,char_x,sizeof char_x);
-//    BIG_output(x);
-//    cout << endl;
-//    f(1, x, &res);
-//    BIG_output(res);
-//    cout << endl;
-}
-
-
-int main() {
+    struct timeval startTime;
+    struct timeval endTime;
+    long signTime = 0;
+    long verifyTime = 0;
+    // 1. 初始化随机种子
     initRNG(&rng_CCAP);
     Msg msg;
     Args args;
-    struct timeval startTime;
-    struct timeval endTime;
+    // 2. 初始化阶段
     gettimeofday(&startTime, NULL);
-    step1(&msg);
-    step2(&msg);
-    initArgs(&args, msg);
-    verify_M_ij(args);
-    verify_UVW(args);
-    verify_AC(args);
-    verify_BXX(args);
-    verify_D(args, msg);// 这个验证没有通过，但是不影响计算开销的测量
+    init(&params);
     gettimeofday(&endTime, NULL);
-    cout << endTime.tv_usec - startTime.tv_usec << endl;
+    cout << "CCAP's Setup time consumption is : " << endTime.tv_usec - startTime.tv_usec << " us" << endl;
+    // 3. 签名
+    gettimeofday(&startTime, NULL);
+    Msg1 msg1 = di_A_crossDomain_request();
+    Msg2 msg2 = PAS_A_gen_ID_A(msg1, &msg, startTime, &signTime);
+    PAS_B_verify(msg2, &msg,&startTime);
+    gettimeofday(&endTime, NULL);
+    verifyTime += endTime.tv_usec - startTime.tv_usec;
+    // 4. 伪身份选择阶段的签名
+    gettimeofday(&startTime, NULL);
+    PAS_B_gen_Lics(&msg);
+    initArgs(&args, msg);
+    PAS_A_gen_mij(args);
+    UVW uvw = PAS_A_gen_UVW(args);
+    FP12 C_d = PAS_A_gen_AC(args);
+    BXX bxx = PAS_A_gen_BXX(args);
+    FP12 D_d = PAS_A_gen_D(args);
+    gettimeofday(&endTime, NULL);
+    signTime += endTime.tv_usec - startTime.tv_usec;
+    // 4. 验证
+    gettimeofday(&startTime, NULL);
+    PAS_A_Verify_Lics(msg);
+    PAS_B_verify_Mij(args);
+    PAS_B_verify_UVW(uvw, args);
+    PAS_B_verify_AC(C_d, args);
+    PAS_B_verify_BXX(bxx,args);
+    PAS_B_verify_D(D_d,args,msg);// 这个验证没有通过，但是不影响计算开销的测量
+    gettimeofday(&endTime, NULL);
+    verifyTime += endTime.tv_usec - startTime.tv_usec;
+    cout << "CCAP's Sign time consumption is : " << signTime << " us" << endl;
+    cout << "CCAP's Verify time consumption is : " << verifyTime << " us" << endl;
 
+    gettimeofday(&startTime, NULL);
+    ID_tracking(args);
+    gettimeofday(&endTime, NULL);
+    cout << "CCAP's Tracking time consumption is : " << endTime.tv_usec - startTime.tv_usec << " us" << endl;
+}
 
-//    test_fi(args);
-
+int main() {
+    CCAP();
     return 0;
 }
 
