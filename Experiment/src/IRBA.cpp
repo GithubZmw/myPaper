@@ -13,7 +13,6 @@ csprng rng_IRBA;
 Params param;
 
 
-
 long long getCurrentTime() {
     return chrono::duration_cast<chrono::microseconds>(chrono::system_clock::now().time_since_epoch()).count();
 }
@@ -44,7 +43,6 @@ void hashtoZp384_IRBA(BIG num, octet *ct, BIG q) {
 }
 
 
-
 void H1(ECP2 *result, BIG ID_UE, BIG t, ECP P) {
     octet oc, oc2;
     char str[48], str2[48], str3[48];
@@ -70,7 +68,6 @@ void H1(ECP2 *result, BIG ID_UE, BIG t, ECP P) {
     ECP2_copy(result, &param.Q);
     ECP2_mul(result, t1);
 }
-
 
 
 void H2(ECP *result, BIG m) {
@@ -102,7 +99,6 @@ void H2(ECP2 *result, BIG m) {
 }
 
 
-
 void H3(BIG *result, FP12 x, FP12 y, FP12 w, FP12 sigma) {
     octet oc, oc2;
     char str[48], str2[48], str3[48];
@@ -131,7 +127,6 @@ void H3(BIG *result, FP12 x, FP12 y, FP12 w, FP12 sigma) {
 
     hashtoZp384_IRBA(*result, &oc, param.q);
 }
-
 
 
 FP12 e_IRBA(ECP alpha1, ECP2 alpha2) {
@@ -216,7 +211,6 @@ void testH123() {
 }
 
 
-
 void showUE(UE ue) {
     cout
             << "------------------------------------------------------- showUE ----------------------------------------------------"
@@ -260,7 +254,6 @@ void showSign(Sign sign) {
 }
 
 
-
 void Setup(Params *params, AS *As) {
     BIG_rcopy(params->q, CURVE_Order);
     ECP_generator(&params->P);
@@ -274,7 +267,7 @@ void Setup(Params *params, AS *As) {
 
 // 签名请求
 void Sign_request() {
-    cout << "UE Extract request" << endl;
+//    cout << "UE Extract request" << endl;
 }
 
 
@@ -390,44 +383,64 @@ bool Verify(Params params, BIG m, Sign sign, UE ue, AS As) {
 
 
 // “IRBA”认证方案的全流程
-void IRBA(){
+void IRBA() {
     struct timeval startTime;
     struct timeval endTime;
     // 1. 初始化阶段
     AS As;
     initRNG(&rng_IRBA);
-    // 2. 系统参数生成
-    gettimeofday(&startTime, NULL);
-    Setup(&param, &As);
-    gettimeofday(&endTime, NULL);
-    cout << "IRBA's Setup time consumption is : " <<  endTime.tv_usec - startTime.tv_usec << " us" <<  endl;
-    // 3. Extract阶段
-    gettimeofday(&startTime, NULL);
-    UE ue;
-    Msg1_Extract msg1 = Extract_UE(param, &ue);
-    Msg2_Extract msg2 = Extract_AS(param, msg1, As);
-    Extract_UE2(&ue, msg2);
-    gettimeofday(&endTime, NULL);
-    cout << "IRBA's Extract time consumption is : " <<  endTime.tv_usec - startTime.tv_usec << " us" <<  endl;
-    // 4. Signing阶段
-    gettimeofday(&startTime, NULL);
-    BIG m;
-    randBigInt_IRBA(&m);
-    Sign sign = Signing(param, m, ue, &As);
-    gettimeofday(&endTime, NULL);
-    cout << "IRBA's Signing time consumption is : " <<  endTime.tv_usec - startTime.tv_usec << " us" <<  endl;
-    // 5. Verify阶段
-    gettimeofday(&startTime, NULL);
-    cout << (Verify(param, m, sign, ue, As) ? "verify success" : "verify defeat") << endl;
-    gettimeofday(&endTime, NULL);
-    cout << "IRBA's Verify time consumption is : " <<  endTime.tv_usec - startTime.tv_usec << " us" <<  endl;
+
+    long setupTime = 0, extractTime = 0, signTime = 0, verTime = 0;
+    int repeatCount = 100;
+    for (int i = 0; i < repeatCount; ++i) {
+        // 2. 系统参数生成
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        Setup(&param, &As);
+        gettimeofday(&endTime, NULL);
+        setupTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+
+        // 3. Extract阶段
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        UE ue;
+        Msg1_Extract msg1 = Extract_UE(param, &ue);
+        Msg2_Extract msg2 = Extract_AS(param, msg1, As);
+        Extract_UE2(&ue, msg2);
+        gettimeofday(&endTime, NULL);
+        extractTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+        // 4. Signing阶段
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        BIG m;
+        randBigInt_IRBA(&m);
+        Sign sign = Signing(param, m, ue, &As);
+        gettimeofday(&endTime, NULL);
+        signTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+        // 5. Verify阶段
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        bool flag = Verify(param, m, sign, ue, As);
+//        cout << (flag ? "verify success" : "verify defeat") << endl;
+        gettimeofday(&endTime, NULL);
+        verTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+    }
+    cout << "IRBA's Setup time consumption is : " << setupTime / repeatCount << " us" << endl;
+    cout << "IRBA's Extract time consumption is : " << extractTime / repeatCount << " us" << endl;
+    cout << "IRBA's Signing time consumption is : " << signTime / repeatCount << " us" << endl;
+    cout << "IRBA's Verify time consumption is : " << verTime / repeatCount << " us" << endl;
+
 }
 
 
-//int main() {
-//    IRBA();
-//    return 0;
-//}
+int main() {
+    IRBA();
+    return 0;
+}
 
 
 

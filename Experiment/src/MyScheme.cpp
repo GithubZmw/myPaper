@@ -6,14 +6,14 @@
 #include "MyScheme.h"
 #include "iostream"
 
+
 BIG order;// 椭圆曲线的阶
 csprng rng1;//随机数发生器
 vector<DM> BC;// 区块链实体
 DM DM1;//域管理员实例
 SD SD1[3];//智能设备SD实例
 
-struct timeval startTime;
-struct timeval endTime;
+
 
 
 // ------------------------------------------------ 工具函数的定义 -------------------------------------------------------
@@ -83,7 +83,7 @@ FP12 e(ECP alpha1, ECP2 alpha2) {
     return temp1;
 }
 
-void H(BIG *c,ECP T1,ECP T2,ECP T3,ECP2 A1,ECP2 A2,ECP R1,ECP R2,FP12 R3,ECP R4,DM dm){
+void H(BIG *c, ECP T1, ECP T2, ECP T3, ECP2 A1, ECP2 A2, ECP R1, ECP R2, FP12 R3, ECP R4, DM dm) {
     // 计算挑战c
     octet oc, oc2;
     char str[48], str2[48], str3[48];
@@ -114,7 +114,7 @@ void H(BIG *c,ECP T1,ECP T2,ECP T3,ECP2 A1,ECP2 A2,ECP R1,ECP R2,FP12 R3,ECP R4,
     BIG_toBytes(str2, R4.x.g);
     oc2.val = str2;
     OCT_xor(&oc, &oc2);
-    BIG_toBytes(oc2.val,R3.a.a.a.g);
+    BIG_toBytes(oc2.val, R3.a.a.a.g);
     oc2.val = str2;
     OCT_xor(&oc, &oc2);
     hashtoZp384(*c, &oc2, dm.q);
@@ -216,18 +216,24 @@ void showMsg2(Msg2 msg2) {
 // ------------------------------------------------ 域管理员操作 -------------------------------------------------------
 
 void Update(SD *sd, DM dm) {
+
+    BIG res;
+    BIG_one(res);
     itemDM back = dm.L.back();
-    while (BIG_comp(back.id_i,sd->id_i) != 0){
+    while (BIG_comp(back.id_i, sd->id_i) != 0) {
         BIG si;
-        hashToZp384(si,back.id_i,dm.q);
+        hashToZp384(si, back.id_i, dm.q);
         BIG_add(si, si, dm.x);
         if (!back.isJoin) {
-            BIG_invmodp(si,si,dm.q);
+            BIG_invmodp(si, si, dm.q);
         }
-        ECP2_mul(&sd->W_i, si);
+        BIG_modmul(res, res, si, order);
         dm.L.pop_back();
         back = dm.L.back();
     }
+//    BIG_output(res);
+//    cout << endl;
+    ECP2_mul(&sd->W_i, res);
 }
 
 void Setup(DM *dm) {
@@ -249,9 +255,9 @@ void Setup(DM *dm) {
     // 更新数据
 }
 
-void Join_SD_step1(SD *sd,BIG *id_i) {
+void Join_SD_step1(SD *sd, BIG *id_i) {
     randBigInt(id_i);
-    BIG_copy(sd->id_i,*id_i);
+    BIG_copy(sd->id_i, *id_i);
 }
 
 Msg1 Join_DM(DM *dm, BIG id_i, BIG x) {
@@ -286,7 +292,18 @@ void Join_SD_step2(SD *sd, BIG id_i, Msg1 msg1, DM dm) {
 }
 
 
-Msg2 Sign(SD sd, DM dm) {
+FP12 fp1, fp2;
+
+void preComputation(SD sd, DM dm) {
+    ECP2 Ci_p_Wi;
+    ECP2_copy(&Ci_p_Wi, &sd.C_i);
+    ECP2_add(&Ci_p_Wi, &sd.W_i);
+    fp1 = e(dm.P_pub, Ci_p_Wi);
+    fp2 = e(dm.P_1, Ci_p_Wi);
+}
+
+
+Msg2 Sign(SD sd, DM dm, bool usePreComp) {
 
     BIG u;
     randBigInt(&u);
@@ -326,22 +343,35 @@ Msg2 Sign(SD sd, DM dm) {
     // 求R3
     FP12 t1, t2;
     FP12 R3, m2;
-    ECP2 A1pA2;
-    ECP2_copy(&A1pA2, &A1);
-    ECP2_add(&A1pA2, &A2);
-    t1 = e(dm.P_pub,A1pA2);
-    FP12_pow(&R3, &t1, ru);
-    FP12_reduce(&R3);
+    if (usePreComp) {
+        BIG uru,u2rs;
+        BIG_modmul(uru,u,ru,dm.q);
+        BIG_modmul(u2rs,u,u,dm.q);
+        BIG_modmul(u2rs,u2rs,rs,dm.q);
+        FP12_pow(&R3, &fp1, uru);
+        FP12_reduce(&R3);
+        FP12_pow(&m2, &fp2, u2rs);
+        FP12_reduce(&m2);
+        FP12_mul(&R3, &m2);
+        FP12_reduce(&R3);
+    } else {
+        ECP2 A1pA2;
+        ECP2_copy(&A1pA2, &A1);
+        ECP2_add(&A1pA2, &A2);
+        t1 = e(dm.P_pub, A1pA2);
+        FP12_pow(&R3, &t1, ru);
+        FP12_reduce(&R3);
 
-    t2 = e(T1,A1pA2);
-    FP12_pow(&m2, &t2, rs);
-    FP12_reduce(&m2);
-    FP12_mul(&R3, &m2);
-    FP12_reduce(&R3);
+        t2 = e(T1, A1pA2);
+        FP12_pow(&m2, &t2, rs);
+        FP12_reduce(&m2);
+        FP12_mul(&R3, &m2);
+        FP12_reduce(&R3);
+    }
 
     // 计算挑战c
     BIG c;
-    H(&c,T1,T2,T3,A1,A2,R1,R2,R3,R4,dm);
+    H(&c, T1, T2, T3, A1, A2, R1, R2, R3, R4, dm);
 
     // 计算 ss 和 su
     BIG su, ss;
@@ -395,18 +425,18 @@ bool Verify(Msg2 msg2, DM dm) {
     ECP2_copy(&A1pA2, &A1);
     ECP2_add(&A1pA2, &A2);
 
-    t1 = e(dm.P_pub,A1pA2);
+    t1 = e(dm.P_pub, A1pA2);
     FP12_pow(&R3_hat, &t1, msg2.su);
     FP12_reduce(&R3_hat);
 
-    t2 = e(T1,A1pA2);
+    t2 = e(T1, A1pA2);
     FP12_pow(&m2, &t2, msg2.ss);
     FP12_reduce(&m2);
 
     ECP2 ACCpP2;
     ECP2_copy(&ACCpP2, &dm.ACC);
     ECP2_add(&ACCpP2, &dm.P_2);
-    t3 = e( T2,ACCpP2);
+    t3 = e(T2, ACCpP2);
     FP12_pow(&m3, &t3, msg2.c);
     FP12_reduce(&m3);
     FP12_inv(&m3, &m3);
@@ -428,7 +458,7 @@ bool Verify(Msg2 msg2, DM dm) {
 
     // 求哈希得到c_hat
     BIG c_hat;
-    H(&c_hat,T1,T2,T3,A1,A2,R1_hat,R2_hat,R3_hat,R4_hat,dm);
+    H(&c_hat, T1, T2, T3, A1, A2, R1_hat, R2_hat, R3_hat, R4_hat, dm);
 
     return BIG_comp(c_hat, msg2.c) == 0 ? true : false;
 }
@@ -463,79 +493,138 @@ void Revoke(itemDM item, DM *dm) {
     dm->L.push_back(newItem);
 }
 
-void te(){
+void te() {
 
 }
 
 // 我们方案的全流程
 void MyScheme() {
+
+
     // 1. 准备工作
     initRNG(&rng1);
     BIG_rcopy(order, CURVE_Order);
-    // 2. 初始化阶段
-    gettimeofday(&startTime, NULL);
-    Setup(&DM1);
-    gettimeofday(&endTime, NULL);
-    cout << "MyScheme's Setup time consumption is : \t" <<  endTime.tv_usec - startTime.tv_usec << " us" <<endl;
 
-    // 3. SD加入群组[模拟三个人加入]
-    gettimeofday(&startTime, NULL);
-    for (int i = 0; i < 3; ++i) {
-        BIG id_i;
-        Join_SD_step1(&SD1[i],&id_i);
-        Msg1 msg1 = Join_DM(&DM1, id_i, DM1.x);
-        Join_SD_step2(&SD1[i], id_i, msg1,DM1);
+    struct timeval startTime;
+    struct timeval endTime;
+    long setupTime = 0, joinTime = 0, signTime = 0, verTime = 0, openTime = 0, revokeTime = 0, updateTime = 0, reSignTime = 0, preSignTime = 0;
+    int repeatCount = 100;
+    for (int i = 0; i < repeatCount; ++i) {
+        // 2. 初始化阶段
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        Setup(&DM1);
+        gettimeofday(&endTime, NULL);
+        setupTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << "MyScheme's Setup time consumption is : \t" <<  endTime.tv_usec - startTime.tv_usec << " us" <<endl;
+
+        // 3. SD加入群组[模拟三个人加入]
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        for (int i = 0; i < 3; ++i) {
+            BIG id_i;
+            Join_SD_step1(&SD1[i], &id_i);
+            Msg1 msg1 = Join_DM(&DM1, id_i, DM1.x);
+            Join_SD_step2(&SD1[i], id_i, msg1, DM1);
+        }
+        gettimeofday(&endTime, NULL);
+        joinTime += ((endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec)) / 3;
+//        cout << "MyScheme's Join time consumption is : \t" <<  (endTime.tv_usec - startTime.tv_usec)/3 <<" us" << endl;
+
+        // 4. 智能设备 SD[2] 进行签名
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        Msg2 msg2 = Sign(SD1[2], DM1, false);
+        gettimeofday(&endTime, NULL);
+        signTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << "MyScheme's Sign time consumption is : \t" <<  endTime.tv_usec - startTime.tv_usec << " us" <<endl;
+
+        // 5. 域管理员验证
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        Verify(msg2, DM1);
+        gettimeofday(&endTime, NULL);
+        verTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << (Verify(msg2, DM1) ? "verify success" : "verify defeat") << endl;
+//        cout << "MyScheme's Verify time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+
+        // 6. 假设SD[2]是恶意设备，首先通过其签名msg2揭露他的真实身份。
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        itemDM item = Open(msg2, DM1);
+        gettimeofday(&endTime, NULL);
+        openTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << "MyScheme's Open time consumption is : \t" <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+
+        // 7. 根据真实身份撤销这个智能设备
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        Revoke(item, &DM1);
+        gettimeofday(&endTime, NULL);
+        revokeTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << "MyScheme's Revoke time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+
+        // 8. 撤销后假设智能设备SD[0]想要进行认证,先更新证据，在进行跨域认证
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        Update(&SD1[0], DM1);
+        gettimeofday(&endTime, NULL);
+        updateTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << "MyScheme's Update time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+        // 跨域认证时间
+        gettimeofday(&startTime, NULL);
+        Msg2 msg22 = Sign(SD1[0], DM1, false);
+        Verify(msg22, DM1);
+        gettimeofday(&endTime, NULL);
+        reSignTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << (Verify(msg22, DM1) ? "verify success" : "verify defeat") << endl;
+//        cout << "Resign and Verify time consumption is : " <<  endTime.tv_usec - startTime.tv_usec << " us" <<  endl;
+
+////         9. 撤销SD[2]后假设智能设备SD[2]想要进行认证,此时认证无法通过
+//        timerclear(&startTime);
+//        timerclear(&endTime);
+//        Update(&SD1[2],DM1);
+//        Msg2 msg222 = Sign(SD1[2], DM1,usePreComp);
+//        cout << "SD[2] has been revoked,so it is not going to make cross authentication" << endl;
+//        cout << (Verify(msg222, DM1) ? "verify success" : "verify defeat") << endl;
+
+        // 10. 有预计算的认证速度
+        timerclear(&startTime);
+        timerclear(&endTime);
+        Update(&SD1[1], DM1);
+        preComputation(SD1[1], DM1);
+
+        gettimeofday(&startTime, NULL);
+        Msg2 msg111 = Sign(SD1[1], DM1, true);
+        gettimeofday(&endTime, NULL);
+        preSignTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+
+//        cout << (Verify(msg111, DM1) ? "verify success" : "verify defeat") << endl;
+
     }
-    gettimeofday(&endTime, NULL);
-    cout << "MyScheme's Join time consumption is : \t" <<  (endTime.tv_usec - startTime.tv_usec)/3 <<" us" << endl;
 
-    // 4. 智能设备 SD[2] 进行签名
-    gettimeofday(&startTime, NULL);
-    Msg2 msg2 = Sign(SD1[2], DM1);
-    gettimeofday(&endTime, NULL);
-    cout << "MyScheme's Sign time consumption is : \t" <<  endTime.tv_usec - startTime.tv_usec << " us" <<endl;
+    cout << "MyScheme's Setup time consumption is : \t" << setupTime / repeatCount << " us" << endl;
+    cout << "MyScheme's Join time consumption is : \t" << joinTime / repeatCount << " us" << endl;
+    cout << "MyScheme's Sign time consumption is : \t" << signTime / repeatCount << " us" << endl;
+    cout << "MyScheme's Verify time consumption is : " << verTime / repeatCount << " us" << endl;
+    cout << "MyScheme's Open time consumption is : \t" << openTime / repeatCount << " us" << endl;
+    cout << "MyScheme's Revoke time consumption is : " << revokeTime / repeatCount << " us" << endl;
+    cout << "MyScheme's Update time consumption is : " << updateTime / repeatCount << " us" << endl;
+    cout << "Resign and Verify time consumption is : " << reSignTime / repeatCount << " us" << endl;
+    cout << "preCompSign time consumption is : \t" << preSignTime / repeatCount << " us" << endl;
 
-    // 5. 域管理员验证
-    gettimeofday(&startTime, NULL);
-    cout << (Verify(msg2, DM1) ? "verify success" : "verify defeat") << endl;
-    gettimeofday(&endTime, NULL);
-    cout << "MyScheme's Verify time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
-
-    // 6. 假设SD[2]是恶意设备，首先通过其签名msg2揭露他的真实身份。
-    gettimeofday(&startTime, NULL);
-    itemDM item = Open(msg2,DM1);
-    gettimeofday(&endTime, NULL);
-    cout << "MyScheme's Open time consumption is : \t" <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
-
-    // 7. 根据真实身份撤销这个智能设备
-    gettimeofday(&startTime, NULL);
-    Revoke(item,&DM1);
-    gettimeofday(&endTime, NULL);
-    cout << "MyScheme's Revoke time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
-
-    // 8. 撤销后假设智能设备SD[0]想要进行认证,先更新证据，在进行跨域认证
-    gettimeofday(&startTime, NULL);
-    Update(&SD1[0],DM1);
-    gettimeofday(&endTime, NULL);
-    cout << "MyScheme's Update time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
-    // 跨域认证时间
-    gettimeofday(&startTime, NULL);
-    Msg2 msg22 = Sign(SD1[0], DM1);
-    cout << (Verify(msg22, DM1) ? "verify success" : "verify defeat") << endl;
-    gettimeofday(&endTime, NULL);
-    cout << "Resign and Verify time consumption is : " <<  endTime.tv_usec - startTime.tv_usec << " us" <<  endl;
-
-    // 9. 撤销SD[2]后假设智能设备SD[2]想要进行认证,此时认证无法通过
-    cout << endl;
-    Update(&SD1[2],DM1);
-    Msg2 msg222 = Sign(SD1[2], DM1);
-    cout << "SD[2] has been revoked,so it is not going to make cross authentication" << endl;
-    cout << (Verify(msg222, DM1) ? "verify success" : "verify defeat") << endl;
 }
+
 
 //int main() {
 //    MyScheme();
 //    return 0;
 //}
-
 

@@ -12,15 +12,15 @@ static char message[] = "This is a test message";
 
 
 
-//int main() {
-//
-//    // 声明并初始化随机数发生器
-//    initRNG(&rng);
-//    testForNIST256();
-//    testForBLS12381WithPairing();
-//    // 测试结束
-//    return 1;
-//}
+int main() {
+
+    // 声明并初始化随机数发生器
+    initRNG(&rng);
+    testForNIST256();
+    testForBLS12381WithPairing();
+    // 测试结束
+    return 1;
+}
 
 /**
  * 测试NIST256曲线的
@@ -181,6 +181,7 @@ void testForBLS12381WithPairing() {
 
     long pairTotalTime = 0;
     long fp12MULTime = 0;
+    long fp12PowTime = 0;
     for (int i = 0; i < repeatedCount; i++) {
         BIG s;
         randBigInt(&s);
@@ -222,9 +223,20 @@ void testForBLS12381WithPairing() {
             printf("pairing error [mul]\n");
         }
         fp12MULTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+
+
+        gettimeofday(&startTime, NULL);
+        FP12_pow(&temp1, &temp2 , s);
+        FP12_reduce(&temp1);
+        gettimeofday(&endTime, NULL);
+        if (FP12_isunity(&temp1) || FP12_iszilch(&temp1)) {
+            printf("pairing error [mul]\n");
+        }
+        fp12PowTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
     }
     printf("PAIR time:%ld\n", pairTotalTime / repeatedCount);
     printf("GT MUL time:%ld\n", fp12MULTime / repeatedCount);
+    printf("GT POW time:%ld\n", fp12PowTime / repeatedCount);
     cout << endl;
 
     // ---------------------------------------------- 测试映射到椭圆曲线点上的哈希的耗时 ----------------------------------------

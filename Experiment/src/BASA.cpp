@@ -177,7 +177,7 @@ XID genPID(Params params, BIG ks) {
 }
 
 void UpdateKeyRequest() {
-    cout << "Send update key request" << endl;
+//    cout << "Send update key request" << endl;
 }
 
 void UpdateKey() {
@@ -195,93 +195,115 @@ void crossDomainAuthRequest() {
 void BASA() {
     struct timeval startTime;
     struct timeval endTime;
-
-    long signTime = 0;
-    long verifyTime = 0;
     // ------------------------------------- 注册阶段 --------------------------------------------
     // 初始化参数
     initRNG(&rng_rng);
     Params params;
     BIG ks;
 
-    // 1. 初始化系统参数
-    gettimeofday(&startTime, NULL);
-    Setup(&params, &ks);
-    gettimeofday(&endTime, NULL);
-    cout << "BASA's Setup time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+    long setupTime = 0, regTime = 0, signTime = 0, verifyTime = 0,signTime_eiA = 0, signTime_KGC = 0;
+    int repeatCount = 100;
+    for (int i = 0; i < repeatCount; ++i) {
+        // 1. 初始化系统参数
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        Setup(&params, &ks);
+        gettimeofday(&endTime, NULL);
+        setupTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
 
-    // 2. 生成真实身份,并向KGC申请对应的签名私钥(注册阶段)
-    gettimeofday(&startTime, NULL);
-    XID RID_ei_A = genPID(params, ks);
-    gettimeofday(&endTime, NULL);
-    cout << "BASA's Register time consumption is : " <<  endTime.tv_usec - startTime.tv_usec <<" us" << endl;
+        // 2. 生成真实身份,并向KGC申请对应的签名私钥(注册阶段)
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        XID RID_ei_A = genPID(params, ks);
+        gettimeofday(&endTime, NULL);
+        regTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
 
-    // 3. KGC为真实身份生成对应的签名私钥
-    gettimeofday(&startTime, NULL);
-    ECP RID_sk = KGC_genKey(RID_ei_A.ID, params, ks);
-    gettimeofday(&endTime, NULL);
-    verifyTime += endTime.tv_usec - startTime.tv_usec;
-    // 4. ei_A生成伪身份
-    gettimeofday(&startTime, NULL);
-    XID ID_ei_A = genPID(params, ks);
-    gettimeofday(&endTime, NULL);
-    signTime += endTime.tv_usec - startTime.tv_usec;
-
-    // 5. KGC为伪身份生成对应的签名私钥
-    gettimeofday(&startTime, NULL);
-    ECP D_id = KGC_genKey(ID_ei_A.ID, params, ks);
-    gettimeofday(&endTime, NULL);
-    verifyTime += endTime.tv_usec - startTime.tv_usec;
-
-    // ------------------------------------- 跨域认证 --------------------------------------------
-    // 1. ei_A验证自己当前伪身份的合法性
-    gettimeofday(&startTime, NULL);
-    bool Valid = isValid(ID_ei_A);
-    if (!Valid) {
-        // 重新生成伪身份,为伪身份生成对应的签名私钥
+        // 3. KGC为真实身份生成对应的签名私钥
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        ECP RID_sk = KGC_genKey(RID_ei_A.ID, params, ks);
+        gettimeofday(&endTime, NULL);
+        regTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+        // 4. ei_A生成伪身份
+        gettimeofday(&startTime, NULL);
         XID ID_ei_A = genPID(params, ks);
+        gettimeofday(&endTime, NULL);
+        regTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+
+        // 5. KGC为伪身份生成对应的签名私钥
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
         ECP D_id = KGC_genKey(ID_ei_A.ID, params, ks);
+        gettimeofday(&endTime, NULL);
+        regTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+
+        // ------------------------------------- 跨域认证 --------------------------------------------
+        // 1. ei_A验证自己当前伪身份的合法性
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        bool Valid = isValid(ID_ei_A);
+        if (!Valid) {
+            // 重新生成伪身份,为伪身份生成对应的签名私钥
+            XID ID_ei_A = genPID(params, ks);
+            ECP D_id = KGC_genKey(ID_ei_A.ID, params, ks);
+        }
+        // 2. 如果伪身份有效,那么使用真实身份的签名私钥对伪身份进行签名
+        Signature signature = SM9_sign(params, RID_sk, ID_ei_A.ID);
+        gettimeofday(&endTime, NULL);
+        signTime_eiA += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+
+        // 3. KGC_A验证签名的正确性并为其ei_A生成签名私钥
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        bool flag = SM9_verify(signature, params, RID_ei_A.ID, ID_ei_A.ID);
+//        cout << "flag: " << flag << endl;
+        ECP sk_ei_A = KGC_genKey(ID_ei_A.ID, params, ks);
+        gettimeofday(&endTime, NULL);
+        signTime_KGC += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+
+        // 4. KGC_A向BAS_A发送密钥更新请求
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        UpdateKeyRequest();
+        // 5. BAS_A更新域A中寡欲ei_A的密钥
+        UpdateKey();
+        // 6. KGC_A收到BAS_A的响应后,将sk_ei发给ei_A
+        Send_sk_ei_A();
+        // 7. ei_A生成消息M
+        BIG N_ei_A;
+        randBigInt_BASA(&N_ei_A);
+        BIG M;
+        BIG_add(M, ID_ei_A.ID, N_ei_A);
+        // 8. 将消息M发给AAS_A,AAS_A生成消息M的签名
+        signature = SM9_sign(params, sk_ei_A, M);
+        // 9. AAS_A将签名给ei_A,然后ei_A给ej_B发送认证请求
+        crossDomainAuthRequest();
+        gettimeofday(&endTime, NULL);
+        signTime_KGC += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+        // 10. ej_B向AAS_B发送请求,验证签名的征正确性
+        timerclear(&startTime);
+        timerclear(&endTime);
+        gettimeofday(&startTime, NULL);
+        flag = flag && SM9_verify(signature, params, ID_ei_A.ID, M);
+        gettimeofday(&endTime, NULL);
+        verifyTime += (endTime.tv_sec - startTime.tv_sec) * 1000000 + (endTime.tv_usec - startTime.tv_usec);
+//        cout << "flag: " << flag << endl;
+
     }
-    // 2. 如果伪身份有效,那么使用真实身份的签名私钥对伪身份进行签名
-    Signature signature = SM9_sign(params, RID_sk, ID_ei_A.ID);
-    gettimeofday(&endTime, NULL);
-    signTime += endTime.tv_usec - startTime.tv_usec;
-
-    // 3. KGC_A验证签名的正确性并为其ei_A生成签名私钥
-    gettimeofday(&startTime, NULL);
-    bool flag = SM9_verify(signature, params, RID_ei_A.ID, ID_ei_A.ID);
-    cout << "flag: " << flag << endl;
-    ECP sk_ei_A = KGC_genKey(ID_ei_A.ID, params, ks);
-    gettimeofday(&endTime, NULL);
-    verifyTime += endTime.tv_usec - startTime.tv_usec;
-
-    // 4. KGC_A向BAS_A发送密钥更新请求
-    gettimeofday(&startTime, NULL);
-    UpdateKeyRequest();
-    // 5. BAS_A更新域A中寡欲ei_A的密钥
-    UpdateKey();
-    // 6. KGC_A收到BAS_A的响应后,将sk_ei发给ei_A
-    Send_sk_ei_A();
-    // 7. ei_A生成消息M
-    BIG N_ei_A;
-    randBigInt_BASA(&N_ei_A);
-    BIG M;
-    BIG_add(M, ID_ei_A.ID, N_ei_A);
-    // 8. 将消息M发给AAS_A,AAS_A生成消息M的签名
-    signature = SM9_sign(params, sk_ei_A, M);
-    // 9. AAS_A将签名给ei_A,然后ei_A给ej_B发送认证请求
-    crossDomainAuthRequest();
-    gettimeofday(&endTime, NULL);
-    signTime += endTime.tv_usec - startTime.tv_usec;
-    // 10. ej_B向AAS_B发送请求,验证签名的征正确性
-    gettimeofday(&startTime, NULL);
-    flag = flag && SM9_verify(signature, params, ID_ei_A.ID, M);
-    gettimeofday(&endTime, NULL);
-    verifyTime += endTime.tv_usec - startTime.tv_usec;
-    cout << "flag: " << flag << endl;
-
-    cout << "BASA's Sign time consumption is : " <<  signTime <<" us" << endl;
-    cout << "BASA's Verify time consumption is : " <<  verifyTime <<" us" << endl;
+    signTime = signTime_eiA + signTime_KGC;
+    cout << "BASA's Setup time consumption is : " << setupTime / repeatCount << " us" << endl;
+    cout << "BASA's Register time consumption is : " << regTime / repeatCount << " us" << endl;
+    cout << "BASA's Sign_eiA time consumption is : " << signTime_eiA / repeatCount << " us" << endl;
+    cout << "BASA's Sign_KGC time consumption is : " << signTime_KGC / repeatCount << " us" << endl;
+    cout << "BASA's Sign time consumption is : " << signTime / repeatCount << " us" << endl;
+    cout << "BASA's Verify time consumption is : " << verifyTime / repeatCount << " us" << endl;
 }
 
 
